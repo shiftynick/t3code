@@ -12,6 +12,7 @@ import {
   reorderProjects,
   resolveProjectExpanded,
   setDefaultAdvertisedEndpointKey,
+  setSidebarQuotaExpanded,
   setProjectExpanded,
   setThreadChangedFilesExpanded,
   type UiState,
@@ -24,6 +25,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
+    sidebarQuotaExpanded: false,
     ...overrides,
   };
 }
@@ -144,6 +146,14 @@ describe("uiStateStore pure functions", () => {
       defaultAdvertisedEndpointKey: null,
     });
   });
+
+  it("persists the sidebar quota panel open state", () => {
+    const initial = makeUiState();
+    const opened = setSidebarQuotaExpanded(initial, true);
+    expect(opened.sidebarQuotaExpanded).toBe(true);
+    expect(setSidebarQuotaExpanded(opened, true)).toBe(opened);
+    expect(setSidebarQuotaExpanded(opened, false).sidebarQuotaExpanded).toBe(false);
+  });
 });
 
 describe("parsePersistedState", () => {
@@ -183,6 +193,7 @@ describe("parsePersistedState", () => {
           "turn-2": true,
         },
       },
+      sidebarQuotaExpanded: false,
     });
   });
 
@@ -303,6 +314,7 @@ describe("uiStateStore persistence", () => {
           "turn-2": true,
         },
       },
+      sidebarQuotaExpanded: false,
     });
     expect(parsePersistedState(persisted)).toEqual({
       ...state,

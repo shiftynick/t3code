@@ -22,6 +22,7 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "../ui/sidebar";
+import { SidebarQuotaSection } from "./SidebarQuota";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
 
@@ -163,6 +164,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
             <span>Settings</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
+        <SidebarQuotaSection />
       </SidebarMenu>
     </SidebarFooter>
   );
