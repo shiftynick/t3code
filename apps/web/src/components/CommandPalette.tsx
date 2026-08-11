@@ -1511,7 +1511,16 @@ function OpenCommandPaletteDialog(props: {
   actionItems.push({
     kind: "action",
     value: "action:quota",
-    searchTerms: ["quota", "usage", "remaining", "rate limit", "subscription", "claude", "codex"],
+    searchTerms: [
+      "quota",
+      "usage",
+      "remaining",
+      "rate limit",
+      "subscription",
+      "claude",
+      "codex",
+      "cursor",
+    ],
     title: "Toggle quota",
     icon: <GaugeIcon className={ITEM_ICON_CLASS} />,
     shortcutCommand: "quota.toggle",

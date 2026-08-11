@@ -13,6 +13,7 @@ import { SettingsSection } from "../settings/components/SettingsSection";
 const PROVIDER_LABEL: Record<QuotaProviderKind, string> = {
   claude: "Claude",
   codex: "Codex",
+  cursor: "Cursor",
 };
 
 export function QuotaRouteScreen() {

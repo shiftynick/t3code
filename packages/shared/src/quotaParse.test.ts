@@ -1,6 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { parseClaudeUsageWindows, parseCodexRateLimits } from "./quotaParse.ts";
+import {
+  parseClaudeUsageWindows,
+  parseCodexRateLimits,
+  parseCursorPeriodUsage,
+} from "./quotaParse.ts";
 
 describe("parseClaudeUsageWindows", () => {
   it("maps known windows and ignores spend objects", () => {
@@ -103,5 +107,80 @@ describe("parseCodexRateLimits", () => {
     expect(parsed.windows.map((window) => window.id)).toEqual(["|primary|300", "|secondary|10080"]);
     expect(parsed.windows[0]?.remainingPercent).toBe(80);
     expect(parsed.windows[1]?.remainingPercent).toBe(65);
+  });
+});
+
+describe("parseCursorPeriodUsage", () => {
+  it("maps included, auto, and API windows from plan usage", () => {
+    const parsed = parseCursorPeriodUsage(
+      {
+        billingCycleStart: "1768399334000",
+        billingCycleEnd: "1771077734000",
+        planUsage: {
+          includedSpend: 23222,
+          remaining: 16778,
+          limit: 40000,
+          autoPercentUsed: 10.5,
+          apiPercentUsed: 46.444,
+          totalPercentUsed: 58.055,
+        },
+      },
+      "ultra",
+    );
+
+    expect(parsed.planLabel).toBe("Ultra");
+    expect(parsed.windows).toEqual([
+      {
+        id: "included",
+        label: "Included",
+        remainingPercent: 41.945,
+        resetsAt: "2026-02-14T14:02:14.000Z",
+        durationMinutes: 44_640,
+      },
+      {
+        id: "auto",
+        label: "Auto + Composer",
+        remainingPercent: 89.5,
+        resetsAt: "2026-02-14T14:02:14.000Z",
+        durationMinutes: 44_640,
+      },
+      {
+        id: "api",
+        label: "API models",
+        remainingPercent: 53.556,
+        resetsAt: "2026-02-14T14:02:14.000Z",
+        durationMinutes: 44_640,
+      },
+    ]);
+  });
+
+  it("derives included remaining from spend when remaining is absent", () => {
+    const parsed = parseCursorPeriodUsage(
+      {
+        billingCycleStart: "1783476262000",
+        billingCycleEnd: "1786154662000",
+        planUsage: {
+          includedSpend: 2000,
+          limit: 2000,
+          autoPercentUsed: 39.57666666666667,
+          apiPercentUsed: 88.57777777777778,
+          totalPercentUsed: 45.96811594202899,
+        },
+      },
+      "pro",
+    );
+
+    expect(parsed.planLabel).toBe("Pro");
+    expect(parsed.windows[0]).toMatchObject({
+      id: "included",
+      label: "Included",
+      remainingPercent: 0,
+    });
+    expect(parsed.windows[1]?.remainingPercent).toBeCloseTo(60.42333333333333, 5);
+    expect(parsed.windows[2]?.remainingPercent).toBeCloseTo(11.42222222222222, 5);
+  });
+
+  it("returns no windows when plan usage is missing", () => {
+    expect(parseCursorPeriodUsage({ billingCycleEnd: "1771077734000" }, "pro").windows).toEqual([]);
   });
 });

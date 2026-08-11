@@ -1,13 +1,17 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Cursor state.vscdb lives at OS-specific app-data paths; sqlite is opened read-only with node:sqlite.
 /**
- * QuotaService - reads Claude and Codex subscription remaining windows.
+ * QuotaService - reads Claude, Codex, and Cursor subscription remaining windows.
  *
  * Claude uses the signed-in OAuth credential and Anthropic's usage endpoint.
- * Codex is queried through a short-lived `codex app-server` process. Tokens
- * and raw provider payloads never leave this module.
+ * Codex is queried through a short-lived `codex app-server` process. Cursor
+ * reads the desktop app's local SQLite sign-in read-only and calls Cursor's
+ * usage API. Tokens and raw provider payloads never leave this module.
  *
  * @module QuotaService
  */
 import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 
 import {
   QUOTA_CONTRACT_VERSION,
@@ -38,6 +42,7 @@ import {
   humanizeQuotaName,
   parseClaudeUsageWindows,
   parseCodexRateLimits,
+  parseCursorPeriodUsage,
 } from "@t3tools/shared/quotaParse";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
@@ -58,6 +63,15 @@ const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_REQUEST_TIMEOUT_MS = 15_000;
 const CODEX_REQUEST_TIMEOUT_MS = 20_000;
 const CODEX_FORCE_KILL_AFTER = "2 seconds" as const;
+const CURSOR_USAGE_URL =
+  "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
+const CURSOR_TOKEN_URL = "https://api2.cursor.sh/oauth/token";
+const CURSOR_OAUTH_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
+const CURSOR_REQUEST_TIMEOUT_MS = 15_000;
+const CURSOR_ACCESS_TOKEN_KEY = "cursorAuth/accessToken";
+const CURSOR_REFRESH_TOKEN_KEY = "cursorAuth/refreshToken";
+const CURSOR_MEMBERSHIP_TYPE_KEY = "cursorAuth/stripeMembershipType";
+const CURSOR_JWT_REFRESH_SKEW_MS = 2 * 60_000;
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
 interface ClaudeOauthCredential {
@@ -173,6 +187,111 @@ export function parseClaudeOauthCredential(
     accessToken,
     planLabel: subscriptionType.length > 0 ? humanizeQuotaName(subscriptionType) : null,
   });
+}
+
+interface CursorLocalAuth {
+  readonly accessToken: string;
+  readonly refreshToken: string;
+  readonly planLabel: string | null;
+}
+
+export function resolveCursorStateDbPath(input: {
+  readonly platform: NodeJS.Platform;
+  readonly homedir: string;
+  readonly appData?: string;
+  readonly xdgConfigHome?: string;
+}): string {
+  const path = input.platform === "win32" ? NodePath.win32 : NodePath.posix;
+  if (input.platform === "win32") {
+    const appData = input.appData?.trim() || path.join(input.homedir, "AppData", "Roaming");
+    return path.join(appData, "Cursor", "User", "globalStorage", "state.vscdb");
+  }
+  if (input.platform === "darwin") {
+    return path.join(
+      input.homedir,
+      "Library",
+      "Application Support",
+      "Cursor",
+      "User",
+      "globalStorage",
+      "state.vscdb",
+    );
+  }
+  const configHome = input.xdgConfigHome?.trim() || path.join(input.homedir, ".config");
+  return path.join(configHome, "Cursor", "User", "globalStorage", "state.vscdb");
+}
+
+export function isCursorAccessTokenExpiring(jwt: string, nowMs: number): boolean {
+  const expiryMs = readJwtExpiryMs(jwt);
+  if (expiryMs === null) return false;
+  return expiryMs <= nowMs + CURSOR_JWT_REFRESH_SKEW_MS;
+}
+
+function readJwtExpiryMs(jwt: string): number | null {
+  const parts = jwt.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const payload = decodeJwtPayload(parts[1]!);
+    if (payload === null || typeof payload !== "object" || !("exp" in payload)) return null;
+    const exp = (payload as { exp?: unknown }).exp;
+    if (typeof exp !== "number" || !Number.isFinite(exp) || exp <= 0) return null;
+    return exp * 1000;
+  } catch {
+    return null;
+  }
+}
+
+function decodeJwtPayload(segment: string): unknown {
+  const padded = segment.replace(/-/g, "+").replace(/_/g, "/");
+  const pad = padded.length % 4 === 0 ? "" : "=".repeat(4 - (padded.length % 4));
+  return JSON.parse(Buffer.from(`${padded}${pad}`, "base64").toString("utf8"));
+}
+
+function readCursorItemValue(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (value instanceof Uint8Array) return Buffer.from(value).toString("utf8").trim();
+  return "";
+}
+
+export function readCursorLocalAuth(
+  databasePath: string,
+): Result.Result<CursorLocalAuth, QuotaProviderSnapshot> {
+  let database: NodeSqlite.DatabaseSync | undefined;
+  try {
+    database = new NodeSqlite.DatabaseSync(databasePath, { readOnly: true });
+    const statement = database.prepare("SELECT value FROM ItemTable WHERE key = ? LIMIT 1");
+    const read = (key: string) => {
+      const row = statement.get(key) as { value?: unknown } | undefined;
+      return readCursorItemValue(row?.value);
+    };
+    const accessToken = read(CURSOR_ACCESS_TOKEN_KEY);
+    const refreshToken = read(CURSOR_REFRESH_TOKEN_KEY);
+    const membershipType = read(CURSOR_MEMBERSHIP_TYPE_KEY);
+    if (accessToken.length === 0 || refreshToken.length === 0) {
+      return Result.fail(
+        emptyProviderSnapshot(
+          "cursor",
+          "unauthenticated",
+          "Cursor is not signed in on this computer. Open the Cursor app and sign in.",
+        ),
+      );
+    }
+    return Result.succeed({
+      accessToken,
+      refreshToken,
+      planLabel: membershipType.length > 0 ? humanizeQuotaName(membershipType) : null,
+    });
+  } catch {
+    return Result.fail(
+      emptyProviderSnapshot(
+        "cursor",
+        "failed",
+        "Could not read Cursor sign-in state. Quit Cursor and try again, or sign in again.",
+      ),
+    );
+  } finally {
+    database?.close();
+  }
 }
 
 const make = Effect.gen(function* () {
@@ -440,18 +559,245 @@ const make = Effect.gen(function* () {
     return next;
   });
 
+  const executeCursorRequest = (request: HttpClientRequest.HttpClientRequest) =>
+    httpClient
+      .execute(request)
+      .pipe(Effect.timeoutOption(CURSOR_REQUEST_TIMEOUT_MS), Effect.result);
+
+  const refreshCursorAccessToken = Effect.fn("QuotaService.refreshCursorAccessToken")(function* (
+    refreshToken: string,
+  ): Effect.fn.Return<Result.Result<string, QuotaProviderSnapshot>> {
+    const request = HttpClientRequest.post(CURSOR_TOKEN_URL).pipe(
+      HttpClientRequest.bodyJsonUnsafe({
+        grant_type: "refresh_token",
+        client_id: CURSOR_OAUTH_CLIENT_ID,
+        refresh_token: refreshToken,
+      }),
+    );
+    const response = yield* executeCursorRequest(request);
+    if (Result.isFailure(response)) {
+      return Result.fail(emptyProviderSnapshot("cursor", "failed", "Cursor token refresh failed."));
+    }
+    if (Option.isNone(response.success)) {
+      return Result.fail(
+        emptyProviderSnapshot("cursor", "failed", "Cursor token refresh timed out."),
+      );
+    }
+    const httpResponse = response.success.value;
+    const payload = yield* httpResponse.json.pipe(Effect.result);
+    if (
+      Result.isFailure(payload) ||
+      payload.success === null ||
+      typeof payload.success !== "object"
+    ) {
+      return Result.fail(
+        emptyProviderSnapshot(
+          "cursor",
+          "unauthenticated",
+          "Cursor sign-in expired. Open the Cursor app and sign in again.",
+        ),
+      );
+    }
+    const record = payload.success as Record<string, unknown>;
+    if (record.shouldLogout === true) {
+      return Result.fail(
+        emptyProviderSnapshot(
+          "cursor",
+          "unauthenticated",
+          "Cursor sign-in expired. Open the Cursor app and sign in again.",
+        ),
+      );
+    }
+    if (httpResponse.status < 200 || httpResponse.status >= 300) {
+      return Result.fail(emptyProviderSnapshot("cursor", "failed", "Cursor token refresh failed."));
+    }
+    const accessToken = typeof record.access_token === "string" ? record.access_token.trim() : "";
+    if (accessToken.length === 0) {
+      return Result.fail(
+        emptyProviderSnapshot(
+          "cursor",
+          "unauthenticated",
+          "Cursor sign-in expired. Open the Cursor app and sign in again.",
+        ),
+      );
+    }
+    return Result.succeed(accessToken);
+  });
+
+  const requestCursorUsage = (accessToken: string) =>
+    HttpClientRequest.post(CURSOR_USAGE_URL).pipe(
+      HttpClientRequest.bearerToken(accessToken),
+      HttpClientRequest.setHeader("content-type", "application/json"),
+      HttpClientRequest.setHeader("connect-protocol-version", "1"),
+      HttpClientRequest.bodyJsonUnsafe({}),
+    );
+
+  const readCursor = Effect.fn("QuotaService.readCursor")(function* (refresh: boolean) {
+    const nowMs = yield* Clock.currentTimeMillis;
+    const cached = cache.get("cursor");
+    if (shouldUseCachedSnapshot({ cached, nowMs, refresh })) {
+      if (cached!.rateLimitedUntilMs > nowMs) {
+        return markCached(
+          cached!.snapshot,
+          "rateLimited",
+          "Cursor is rate limiting quota checks. Showing the last reading.",
+        );
+      }
+      return cached!.snapshot;
+    }
+
+    const databasePath = resolveCursorStateDbPath({
+      platform: process.platform,
+      homedir: NodeOS.homedir(),
+      ...(process.env.APPDATA ? { appData: process.env.APPDATA } : {}),
+      ...(process.env.XDG_CONFIG_HOME ? { xdgConfigHome: process.env.XDG_CONFIG_HOME } : {}),
+    });
+    const exists = yield* fileSystem.exists(databasePath).pipe(Effect.orElseSucceed(() => false));
+    if (!exists) {
+      return cachedOr(
+        "cursor",
+        emptyProviderSnapshot(
+          "cursor",
+          "unauthenticated",
+          "Cursor is not signed in on this computer. Open the Cursor app and sign in.",
+        ),
+        nowMs,
+      );
+    }
+
+    const auth = readCursorLocalAuth(databasePath);
+    if (Result.isFailure(auth)) {
+      return cachedOr("cursor", auth.failure, nowMs);
+    }
+
+    let accessToken = auth.success.accessToken;
+    if (isCursorAccessTokenExpiring(accessToken, nowMs)) {
+      const refreshed = yield* refreshCursorAccessToken(auth.success.refreshToken);
+      if (Result.isFailure(refreshed)) {
+        return cachedOr("cursor", refreshed.failure, nowMs);
+      }
+      accessToken = refreshed.success;
+    }
+
+    const first = yield* executeCursorRequest(requestCursorUsage(accessToken));
+    if (Result.isFailure(first)) {
+      return cachedOr(
+        "cursor",
+        emptyProviderSnapshot("cursor", "failed", "Cursor quota request failed."),
+        nowMs,
+      );
+    }
+    if (Option.isNone(first.success)) {
+      return cachedOr(
+        "cursor",
+        emptyProviderSnapshot("cursor", "failed", "Cursor quota request timed out."),
+        nowMs,
+      );
+    }
+
+    let httpResponse = first.success.value;
+    if (httpResponse.status === 401 || httpResponse.status === 403) {
+      const refreshed = yield* refreshCursorAccessToken(auth.success.refreshToken);
+      if (Result.isFailure(refreshed)) {
+        return cachedOr("cursor", refreshed.failure, nowMs);
+      }
+      const retry = yield* executeCursorRequest(requestCursorUsage(refreshed.success));
+      if (Result.isFailure(retry)) {
+        return cachedOr(
+          "cursor",
+          emptyProviderSnapshot("cursor", "failed", "Cursor quota request failed."),
+          nowMs,
+        );
+      }
+      if (Option.isNone(retry.success)) {
+        return cachedOr(
+          "cursor",
+          emptyProviderSnapshot("cursor", "failed", "Cursor quota request timed out."),
+          nowMs,
+        );
+      }
+      httpResponse = retry.success.value;
+    }
+
+    if (httpResponse.status === 429) {
+      const retryAfterMs = parseRetryAfterMs(httpResponse.headers["retry-after"], nowMs);
+      if (cached !== undefined) {
+        cache.set("cursor", {
+          ...cached,
+          lastRequestAtMs: nowMs,
+          rateLimitedUntilMs: nowMs + retryAfterMs,
+        });
+        return markCached(
+          cached.snapshot,
+          "rateLimited",
+          "Cursor is rate limiting quota checks. Showing the last reading.",
+        );
+      }
+      return emptyProviderSnapshot(
+        "cursor",
+        "rateLimited",
+        "Cursor is rate limiting quota checks. Try again later.",
+      );
+    }
+    if (httpResponse.status === 401 || httpResponse.status === 403) {
+      return emptyProviderSnapshot(
+        "cursor",
+        "unauthenticated",
+        "Cursor sign-in expired. Open the Cursor app and sign in again.",
+      );
+    }
+    if (httpResponse.status < 200 || httpResponse.status >= 300) {
+      return cachedOr(
+        "cursor",
+        emptyProviderSnapshot("cursor", "failed", "Cursor quota request failed."),
+        nowMs,
+      );
+    }
+
+    const payload = yield* httpResponse.json.pipe(Effect.result);
+    if (Result.isFailure(payload)) {
+      return cachedOr(
+        "cursor",
+        emptyProviderSnapshot("cursor", "failed", "Cursor quota response was unreadable."),
+        nowMs,
+      );
+    }
+
+    const parsed = parseCursorPeriodUsage(payload.success, auth.success.planLabel);
+    if (parsed.windows.length === 0) {
+      return emptyProviderSnapshot(
+        "cursor",
+        "unauthenticated",
+        "Cursor returned no plan usage. Sign in to the Cursor app and open the dashboard once.",
+      );
+    }
+
+    const fetchedAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
+    const snapshot: QuotaProviderSnapshot = {
+      provider: "cursor",
+      planLabel: parsed.planLabel,
+      fetchedAt,
+      status: "ok",
+      message: null,
+      windows: parsed.windows,
+    };
+    storeSuccess(snapshot, nowMs);
+    return snapshot;
+  });
+
   const readSnapshot = Effect.fn("QuotaService.readSnapshot")(function* (
     input: QuotaSnapshotInput,
   ) {
     const refresh = input.refresh === true;
-    const [claude, codex] = yield* Effect.all([readClaude(refresh), readCodex(refresh)], {
-      concurrency: "unbounded",
-    });
+    const [claude, codex, cursor] = yield* Effect.all(
+      [readClaude(refresh), readCodex(refresh), readCursor(refresh)],
+      { concurrency: "unbounded" },
+    );
     const readAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
     return {
       contractVersion: QUOTA_CONTRACT_VERSION,
       readAt,
-      providers: [claude, codex],
+      providers: [claude, codex, cursor],
     } satisfies QuotaSnapshot;
   });
 

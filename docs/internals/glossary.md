@@ -30,10 +30,10 @@ A Git worktree used as an isolated workspace for a thread. If a thread has a `wo
 
 #### Quota
 
-Remaining Claude and Codex subscription windows for an environment. The server
-reads local provider sign-in state and returns percentages plus reset times over
-`server.getQuotaSnapshot`. Distinct from [Usage](../user/usage.md), which scans
-transcripts for API-equivalent token cost.
+Remaining Claude, Codex, and Cursor subscription windows for an environment. The
+server reads local provider sign-in state and returns percentages plus reset
+times over `server.getQuotaSnapshot`. Distinct from [Usage](../user/usage.md),
+which scans transcripts for API-equivalent token cost.
 
 ### Thread timeline
 

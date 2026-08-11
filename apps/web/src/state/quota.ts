@@ -2,7 +2,7 @@
  * Multi-environment subscription quota state.
  *
  * Each connected environment answers the same typed query. Remaining windows
- * are not merged: they belong to the machine that holds the CLI sign-in.
+ * are not merged: they belong to the machine that holds the provider sign-in.
  *
  * @module state/quota
  */

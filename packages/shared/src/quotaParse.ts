@@ -63,6 +63,18 @@ function readUnixSeconds(value: unknown): string | null {
   return new Date(seconds * 1000).toISOString();
 }
 
+function readUnixMilliseconds(value: unknown): string | null {
+  const millis = readFiniteNumber(value);
+  if (millis === null || millis <= 0 || millis > 8_640_000_000_000) return null;
+  return new Date(millis).toISOString();
+}
+
+function readUnixMillisecondsValue(value: unknown): number | null {
+  const millis = readFiniteNumber(value);
+  if (millis === null || millis <= 0 || millis > 8_640_000_000_000) return null;
+  return millis;
+}
+
 function durationLabel(minutes: number, fallback: string): string {
   if (Math.abs(minutes - 300) < 1) return "5-hour limit";
   if (Math.abs(minutes - 10080) < 1) return "7-day limit";
@@ -194,6 +206,96 @@ export function parseCodexRateLimits(result: unknown): {
   return {
     planLabel: planType.length > 0 ? humanizeQuotaName(planType) : null,
     windows: distinct,
+  };
+}
+
+export function parseCursorPeriodUsage(
+  root: unknown,
+  membershipType?: string | null,
+): {
+  readonly planLabel: string | null;
+  readonly windows: readonly QuotaWindow[];
+} {
+  if (!isRecord(root) || !isRecord(root.planUsage)) {
+    return { planLabel: null, windows: [] };
+  }
+
+  const planUsage = root.planUsage;
+  const resetsAt = readUnixMilliseconds(root.billingCycleEnd);
+  const startMs = readUnixMillisecondsValue(root.billingCycleStart);
+  const endMs = readUnixMillisecondsValue(root.billingCycleEnd);
+  const durationMinutes =
+    startMs !== null && endMs !== null && endMs > startMs
+      ? Math.round((endMs - startMs) / 60_000)
+      : null;
+
+  const windows: QuotaWindow[] = [];
+  const included = buildCursorIncludedWindow(planUsage, resetsAt, durationMinutes);
+  if (included !== null) windows.push(included);
+
+  const autoUsed = readFiniteNumber(planUsage.autoPercentUsed);
+  if (autoUsed !== null) {
+    windows.push({
+      id: "auto",
+      label: "Auto + Composer",
+      remainingPercent: clampRemainingPercent(100 - autoUsed),
+      resetsAt,
+      durationMinutes,
+    });
+  }
+
+  const apiUsed = readFiniteNumber(planUsage.apiPercentUsed);
+  if (apiUsed !== null) {
+    windows.push({
+      id: "api",
+      label: "API models",
+      remainingPercent: clampRemainingPercent(100 - apiUsed),
+      resetsAt,
+      durationMinutes,
+    });
+  }
+
+  const trimmed = membershipType?.trim() ?? "";
+  return {
+    planLabel: trimmed.length > 0 ? humanizeQuotaName(trimmed) : null,
+    windows,
+  };
+}
+
+function buildCursorIncludedWindow(
+  planUsage: Record<string, unknown>,
+  resetsAt: string | null,
+  durationMinutes: number | null,
+): QuotaWindow | null {
+  const limit = readFiniteNumber(planUsage.limit);
+  if (limit !== null && limit > 0) {
+    const remaining = readFiniteNumber(planUsage.remaining);
+    const includedSpend = readFiniteNumber(planUsage.includedSpend);
+    const remainingCents =
+      remaining !== null
+        ? remaining
+        : includedSpend !== null
+          ? Math.max(0, limit - includedSpend)
+          : null;
+    if (remainingCents !== null) {
+      return {
+        id: "included",
+        label: "Included",
+        remainingPercent: clampRemainingPercent((remainingCents / limit) * 100),
+        resetsAt,
+        durationMinutes,
+      };
+    }
+  }
+
+  const totalUsed = readFiniteNumber(planUsage.totalPercentUsed);
+  if (totalUsed === null) return null;
+  return {
+    id: "included",
+    label: "Included",
+    remainingPercent: clampRemainingPercent(100 - totalUsed),
+    resetsAt,
+    durationMinutes,
   };
 }
 
