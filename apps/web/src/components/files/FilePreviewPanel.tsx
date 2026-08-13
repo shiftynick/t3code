@@ -68,6 +68,7 @@ interface FilePreviewPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
   projectName: string;
+  isGitRepository: boolean;
   relativePath: string | null;
   threadRef: ScopedThreadRef;
   composerDraftTarget: ScopedThreadRef | DraftId;
@@ -758,6 +759,7 @@ export default function FilePreviewPanel({
   environmentId,
   cwd,
   projectName,
+  isGitRepository,
   relativePath,
   threadRef,
   composerDraftTarget,
@@ -1063,6 +1065,7 @@ export default function FilePreviewPanel({
               environmentId={environmentId}
               cwd={cwd}
               projectName={projectName}
+              isGitRepository={isGitRepository}
               selectedPath={relativePath}
               selectedPathRevealId={revealRequestId}
               onOpenFile={onOpenFile}

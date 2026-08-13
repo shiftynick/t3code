@@ -23,8 +23,33 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/path";
 import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
+
+const WORKSPACE_LIST_MAX_ENTRIES = 25_000;
+
+function toProjectEntries(paths: ReadonlyArray<string>): ProjectListEntriesResult {
+  const entries = new Map<string, ProjectListEntriesResult["entries"][number]>();
+  for (const rawPath of paths) {
+    const normalizedPath = rawPath.replaceAll("\\", "/").replace(/^\.\//, "");
+    if (!normalizedPath) continue;
+    entries.set(normalizedPath, { path: normalizedPath, kind: "file" });
+    let separatorIndex = normalizedPath.lastIndexOf("/");
+    while (separatorIndex > 0) {
+      const directoryPath = normalizedPath.slice(0, separatorIndex);
+      entries.set(directoryPath, { path: directoryPath, kind: "directory" });
+      separatorIndex = directoryPath.lastIndexOf("/");
+    }
+  }
+  const sortedEntries = [...entries.values()].toSorted((left, right) =>
+    left.path.localeCompare(right.path),
+  );
+  return {
+    entries: sortedEntries.slice(0, WORKSPACE_LIST_MAX_ENTRIES),
+    truncated: sortedEntries.length > WORKSPACE_LIST_MAX_ENTRIES,
+  };
+}
 
 export class WorkspaceEntriesWindowsPathUnsupportedError extends Schema.TaggedErrorClass<WorkspaceEntriesWindowsPathUnsupportedError>()(
   "WorkspaceEntriesWindowsPathUnsupportedError",
@@ -142,6 +167,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceSearchIndexes = yield* WorkspaceSearchIndex.WorkspaceSearchIndexMap;
+  const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
 
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
     cwd: string,
@@ -275,6 +301,29 @@ export const make = Effect.gen(function* () {
   const list: WorkspaceEntries["Service"]["list"] = Effect.fn("WorkspaceEntries.list")(
     function* (input) {
       const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
+      if (input.includeIgnored) {
+        const ignoredEntries = yield* Effect.gen(function* () {
+          const vcs = yield* vcsRegistry.detect({ cwd: normalizedCwd });
+          if (!vcs) return null;
+          const result = yield* vcs.driver.listWorkspaceFiles(normalizedCwd, {
+            includeIgnored: true,
+          });
+          const entries = toProjectEntries(result.paths);
+          return { ...entries, truncated: result.truncated || entries.truncated };
+        }).pipe(
+          Effect.mapError(
+            (cause) =>
+              new WorkspaceSearchIndex.WorkspaceSearchIndexSearchFailed({
+                cwd: normalizedCwd,
+                queryLength: 0,
+                pageSize: WORKSPACE_LIST_MAX_ENTRIES,
+                reason: "VCS workspace listing failed.",
+                cause,
+              }),
+          ),
+        );
+        if (ignoredEntries) return ignoredEntries;
+      }
       return yield* Effect.gen(function* () {
         const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
         return yield* searchIndex.list();

@@ -5,13 +5,14 @@ import type {
 import type { EnvironmentId, ProjectEntry } from "@t3tools/contracts";
 import { FileTree, useFileTree, useFileTreeSearch } from "@pierre/trees/react";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
-import { RotateCw } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
+import { EyeOff, RotateCw } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { InputGroup, InputGroupInput } from "~/components/ui/input-group";
 import { toastManager } from "~/components/ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
+import { Toggle } from "~/components/ui/toggle";
 import { useComposerHandleContext } from "~/composerHandleContext";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useTheme } from "~/hooks/useTheme";
@@ -26,6 +27,7 @@ interface FileBrowserPanelProps {
   environmentId: EnvironmentId;
   cwd: string;
   projectName: string;
+  isGitRepository: boolean;
   /** File currently open in the preview pane; revealed and selected in the tree. */
   selectedPath: string | null;
   /** Bumped when the same path should be revealed again (e.g. re-opened from search). */
@@ -102,13 +104,15 @@ export default function FileBrowserPanel({
   environmentId,
   cwd,
   projectName,
+  isGitRepository,
   selectedPath,
   selectedPathRevealId,
   onOpenFile,
 }: FileBrowserPanelProps) {
   const { resolvedTheme } = useTheme();
   const composerRef = useComposerHandleContext();
-  const entriesQuery = useProjectEntriesQuery(environmentId, cwd);
+  const [showIgnoredFiles, setShowIgnoredFiles] = useState(false);
+  const entriesQuery = useProjectEntriesQuery(environmentId, cwd, showIgnoredFiles);
   const entries = entriesQuery.data?.entries ?? [];
   const entryKinds = useMemo(
     () => new Map(entries.map((entry) => [entry.path, entry.kind] as const)),
@@ -359,6 +363,27 @@ export default function FileBrowserPanel({
           onValueChange={handleSearchValueChange}
           onClose={search.close}
         />
+        {isGitRepository ? (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Toggle
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  pressed={showIgnoredFiles}
+                  aria-label={showIgnoredFiles ? "Hide ignored files" : "Show ignored files"}
+                  onPressedChange={setShowIgnoredFiles}
+                >
+                  <EyeOff />
+                </Toggle>
+              }
+            />
+            <TooltipPopup>
+              {showIgnoredFiles ? "Hide ignored files" : "Show ignored files"}
+            </TooltipPopup>
+          </Tooltip>
+        ) : null}
       </div>
       {entriesQuery.error && entriesQuery.data === null ? (
         <div className="p-4 text-xs leading-relaxed text-destructive">{entriesQuery.error}</div>

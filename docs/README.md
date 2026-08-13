@@ -6,6 +6,7 @@
 - [Permission modes](./user/permission-modes.md)
 - [Keyboard shortcuts](./user/keybindings.md)
 - [Organizing threads](./user/thread-sidebar.md)
+- [Browse project files](./user/files.md)
 - [Review usage](./user/usage.md)
 - [Check remaining quota](./user/quota.md)
 - [Customize a project icon](./user/project-settings.md)
