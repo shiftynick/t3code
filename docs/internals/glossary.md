@@ -28,6 +28,13 @@ The root filesystem path for a project. In [the orchestration model][1], it is t
 
 A Git worktree used as an isolated workspace for a thread. If a thread has a `worktreePath` in [the contracts][1], it runs there instead of in the main working tree. Git operations live behind the VCS driver contract in `apps/server/src/vcs/VcsDriver.ts`, implemented by [GitVcsDriverCore.ts][3].
 
+#### Quota
+
+Remaining Claude, Codex, and Cursor subscription windows for an environment. The
+server reads local provider sign-in state and returns percentages plus reset
+times over `server.getQuotaSnapshot`. Distinct from [Usage](../user/usage.md),
+which scans transcripts for API-equivalent token cost.
+
 ### Thread timeline
 
 #### Thread

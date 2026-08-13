@@ -29,6 +29,7 @@ CLAUDE_CONFIG_DIR path: empty
 ```
 
 An empty `CLAUDE_CONFIG_DIR path` means T3 Code uses Claude Code's normal config directory.
+The sidebar **Quota** panel reads remaining subscription windows from that same sign-in.
 
 When you set this field, T3 Code points Claude Code at that directory with the
 `CLAUDE_CONFIG_DIR` environment variable. It does not change `HOME`, so your system keychain and

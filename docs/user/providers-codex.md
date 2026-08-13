@@ -28,6 +28,8 @@ Log in with Codex normally:
 codex login
 ```
 
+The sidebar **Quota** panel reads remaining ChatGPT subscription windows from that sign-in.
+
 ## I Want Work And Personal Codex Accounts
 
 Use one real Codex home and one shadow home.

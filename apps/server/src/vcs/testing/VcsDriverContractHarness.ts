@@ -133,6 +133,23 @@ export function runVcsDriverContractSuite<R, E>(input: VcsDriverContractSuiteInp
           assert.notInclude(result.paths, "nested/error.log");
         }),
       );
+
+      it.effect("includes ignored files when requested", () =>
+        Effect.gen(function* () {
+          const cwd = yield* makeTmpDir();
+          const driver = yield* VcsDriver.VcsDriver;
+
+          yield* input.fixture.createRepo(cwd);
+          yield* input.fixture.ignorePath(cwd, "*.log");
+          yield* input.fixture.writeFile(cwd, "included.ts", "export const included = true;\n");
+          yield* input.fixture.writeFile(cwd, "debug.log", "show me\n");
+
+          const result = yield* driver.listWorkspaceFiles(cwd, { includeIgnored: true });
+
+          assert.include(result.paths, "included.ts");
+          assert.include(result.paths, "debug.log");
+        }),
+      );
     });
 
     describe("ignored path filtering", () => {

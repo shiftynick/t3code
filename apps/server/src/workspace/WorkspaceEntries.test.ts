@@ -12,6 +12,7 @@ import { vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
@@ -24,6 +25,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 const TestLayer = Layer.empty.pipe(
   Layer.provideMerge(WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer))),
   Layer.provideMerge(WorkspacePaths.layer),
+  Layer.provideMerge(VcsDriverRegistry.layer.pipe(Layer.provide(VcsProcess.layer))),
   Layer.provideMerge(VcsProcess.layer),
   Layer.provide(
     ServerConfig.ServerConfig.layerTest(process.cwd(), {
@@ -119,6 +121,28 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceEntries", (it) => {
         );
         expect(result.entries.some((entry) => entry.path.startsWith("node_modules"))).toBe(false);
         expect(result.truncated).toBe(false);
+      }),
+    );
+
+    it.effect("includes gitignored files and their directories when requested", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({ git: true });
+        yield* writeTextFile(cwd, ".gitignore", "ignored/\n");
+        yield* writeTextFile(cwd, "src/keep.ts", "export {};\n");
+        yield* writeTextFile(cwd, "ignored/nested/debug.log", "show me\n");
+
+        const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
+        const result = yield* workspaceEntries.list({ cwd, includeIgnored: true });
+
+        expect(result.entries).toEqual(
+          expect.arrayContaining([
+            { path: "ignored", kind: "directory" },
+            { path: "ignored/nested", kind: "directory" },
+            { path: "ignored/nested/debug.log", kind: "file" },
+            { path: "src/keep.ts", kind: "file" },
+          ]),
+        );
+        expect(result.entries.some((entry) => entry.path.startsWith(".git/"))).toBe(false);
       }),
     );
   });

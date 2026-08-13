@@ -33,6 +33,7 @@ import {
   FileSearchIcon,
   FolderIcon,
   FolderPlusIcon,
+  GaugeIcon,
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
@@ -83,6 +84,7 @@ import {
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
 import { onOpenCommandPalette } from "../commandPaletteBus";
+import { toggleSidebarQuota } from "../sidebarQuotaBus";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { selectActiveRightPanel, useRightPanelStore } from "../rightPanelStore";
@@ -1503,6 +1505,27 @@ function OpenCommandPaletteDialog(props: {
     icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
     run: async () => {
       await navigate({ to: "/settings" });
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:quota",
+    searchTerms: [
+      "quota",
+      "usage",
+      "remaining",
+      "rate limit",
+      "subscription",
+      "claude",
+      "codex",
+      "cursor",
+    ],
+    title: "Toggle quota",
+    icon: <GaugeIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "quota.toggle",
+    run: async () => {
+      toggleSidebarQuota();
     },
   });
 

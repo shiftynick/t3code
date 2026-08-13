@@ -66,6 +66,7 @@ export class VcsDriver extends Context.Service<
     readonly isInsideWorkTree: (cwd: string) => Effect.Effect<boolean, VcsError>;
     readonly listWorkspaceFiles: (
       cwd: string,
+      options?: { readonly includeIgnored?: boolean },
     ) => Effect.Effect<VcsListWorkspaceFilesResult, VcsError>;
     readonly listRemotes: (cwd: string) => Effect.Effect<VcsListRemotesResult, VcsError>;
     readonly filterIgnoredPaths: (

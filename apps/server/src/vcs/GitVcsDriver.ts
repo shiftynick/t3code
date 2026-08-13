@@ -507,7 +507,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
     };
   });
 
-  const listWorkspaceFiles: VcsDriver.VcsDriver["Service"]["listWorkspaceFiles"] = (cwd) =>
+  const listWorkspaceFiles: VcsDriver.VcsDriver["Service"]["listWorkspaceFiles"] = (cwd, options) =>
     gitCommand(
       vcsProcess,
       "GitVcsDriver.listWorkspaceFiles",
@@ -517,7 +517,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         "ls-files",
         "--cached",
         "--others",
-        "--exclude-standard",
+        ...(options?.includeIgnored ? [] : ["--exclude-standard"]),
         "-z",
       ],
       {
