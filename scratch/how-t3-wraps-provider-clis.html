@@ -1,0 +1,880 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>How T3 Code wraps Claude, Codex, and Cursor</title>
+    <style>
+      :root {
+        --ink: #14120f;
+        --paper: #f4efe4;
+        --paper-2: #ebe4d4;
+        --rule: #d4cbb6;
+        --mute: #6b6458;
+        --orange: #d24a12;
+        --orange-ink: #9a3208;
+        --claude: #c45c26;
+        --codex: #1f6b4a;
+        --cursor: #2b4f8a;
+        --danger: #8b1e1e;
+        --mono: "IBM Plex Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+        --sans: "Iowan Old Style", "Palatino Linotype", Palatino, "Times New Roman", serif;
+        --ui: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: var(--paper);
+        color: var(--ink);
+      }
+
+      body {
+        font-family: var(--sans);
+        line-height: 1.45;
+        font-size: 17px;
+      }
+
+      code,
+      .mono,
+      kbd,
+      pre {
+        font-family: var(--mono);
+      }
+
+      .wrap {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 36px 28px 80px;
+      }
+
+      header.mast {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 24px;
+        align-items: end;
+        border-bottom: 3px solid var(--ink);
+        padding-bottom: 22px;
+        margin-bottom: 28px;
+      }
+
+      .kicker {
+        font-family: var(--ui);
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--orange);
+        font-weight: 700;
+        margin: 0 0 10px;
+      }
+
+      h1 {
+        font-size: clamp(34px, 6vw, 64px);
+        line-height: 0.92;
+        letter-spacing: -0.03em;
+        margin: 0;
+        font-weight: 800;
+      }
+
+      .deck {
+        max-width: 38ch;
+        font-family: var(--ui);
+        font-size: 14px;
+        color: var(--mute);
+        margin: 0;
+        text-align: right;
+      }
+
+      .lede {
+        font-size: clamp(20px, 2.4vw, 26px);
+        line-height: 1.28;
+        max-width: 62ch;
+        margin: 0 0 28px;
+      }
+
+      .lede em {
+        font-style: italic;
+        color: var(--orange-ink);
+      }
+
+      .rule {
+        border: 0;
+        border-top: 1px solid var(--rule);
+        margin: 36px 0;
+      }
+
+      h2 {
+        font-size: 13px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        font-family: var(--ui);
+        margin: 0 0 14px;
+      }
+
+      h3 {
+        font-family: var(--ui);
+        font-size: 18px;
+        margin: 0 0 8px;
+      }
+
+      p {
+        margin: 0 0 12px;
+      }
+
+      .callout {
+        background: var(--ink);
+        color: var(--paper);
+        padding: 22px 24px;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 18px;
+        align-items: start;
+        margin: 0 0 32px;
+      }
+
+      .callout .mark {
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: #ffb089;
+        writing-mode: vertical-rl;
+        transform: rotate(180deg);
+        padding-top: 2px;
+      }
+
+      .callout p {
+        margin: 0;
+        font-size: 18px;
+        line-height: 1.35;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 8px;
+        margin: 0 0 10px;
+      }
+
+      .step {
+        background: var(--paper-2);
+        border: 1px solid var(--rule);
+        padding: 12px 12px 14px;
+        min-height: 118px;
+      }
+
+      .step .n {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--orange);
+        display: block;
+        margin-bottom: 8px;
+      }
+
+      .step strong {
+        display: block;
+        font-family: var(--ui);
+        font-size: 14px;
+        margin-bottom: 6px;
+      }
+
+      .step span {
+        display: block;
+        font-family: var(--ui);
+        font-size: 12.5px;
+        color: var(--mute);
+        line-height: 1.35;
+      }
+
+      .arrow-row {
+        display: flex;
+        justify-content: space-between;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--mute);
+        margin-bottom: 28px;
+        padding: 0 4px;
+      }
+
+      .providers {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+      }
+
+      .card {
+        border: 1px solid var(--rule);
+        background: #fffdf7;
+        min-height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .card header {
+        padding: 14px 16px 12px;
+        border-bottom: 1px solid var(--rule);
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+      }
+
+      .card header .kind {
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+      }
+
+      .card.claude header {
+        background: #f7e5d6;
+        color: var(--claude);
+      }
+      .card.codex header {
+        background: #dceee4;
+        color: var(--codex);
+      }
+      .card.cursor header {
+        background: #dce6f4;
+        color: var(--cursor);
+      }
+
+      .card .body {
+        padding: 14px 16px 16px;
+        flex: 1;
+      }
+
+      .meta {
+        font-family: var(--ui);
+        font-size: 13px;
+        margin: 0 0 12px;
+        color: var(--mute);
+      }
+
+      dl {
+        margin: 0;
+      }
+
+      dt {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--mute);
+        margin: 10px 0 3px;
+      }
+
+      dd {
+        margin: 0;
+        font-family: var(--mono);
+        font-size: 12.5px;
+        line-height: 1.4;
+      }
+
+      .proto {
+        margin-top: 14px;
+        border-top: 1px dashed var(--rule);
+        padding-top: 12px;
+      }
+
+      .proto ol {
+        margin: 0;
+        padding-left: 18px;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+
+      .split {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 28px;
+        align-items: start;
+      }
+
+      .never {
+        background: #f6e4e0;
+        border: 1px solid #e3b7ad;
+        padding: 16px 18px 8px;
+      }
+
+      .never h2 {
+        color: var(--danger);
+      }
+
+      .never ul {
+        margin: 0 0 12px;
+        padding-left: 18px;
+      }
+
+      .never li {
+        margin: 0 0 8px;
+        font-family: var(--ui);
+        font-size: 14.5px;
+      }
+
+      .does {
+        background: var(--paper-2);
+        border: 1px solid var(--rule);
+        padding: 16px 18px 8px;
+      }
+
+      .does ul {
+        margin: 0 0 12px;
+        padding-left: 18px;
+      }
+
+      .does li {
+        margin: 0 0 8px;
+        font-family: var(--ui);
+        font-size: 14.5px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: var(--ui);
+        font-size: 14px;
+      }
+
+      th,
+      td {
+        text-align: left;
+        padding: 8px 10px;
+        border-bottom: 1px solid var(--rule);
+        vertical-align: top;
+      }
+
+      th {
+        font-family: var(--mono);
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--mute);
+        font-weight: 600;
+      }
+
+      td code {
+        font-size: 12.5px;
+      }
+
+      .diagram {
+        width: 100%;
+        background: #fffdf7;
+        border: 1px solid var(--rule);
+        padding: 8px 4px 0;
+        margin: 0 0 18px;
+        overflow: hidden;
+      }
+
+      .diagram svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+
+      footer {
+        margin-top: 40px;
+        border-top: 3px solid var(--ink);
+        padding-top: 14px;
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        font-family: var(--ui);
+        font-size: 12px;
+        color: var(--mute);
+      }
+
+      .src {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        color: var(--mute);
+        line-height: 1.55;
+      }
+
+      @media (max-width: 900px) {
+        header.mast,
+        .flow,
+        .providers,
+        .split,
+        footer {
+          grid-template-columns: 1fr;
+          display: grid;
+        }
+
+        .deck,
+        footer {
+          text-align: left;
+        }
+
+        .flow {
+          display: grid;
+        }
+
+        .callout {
+          grid-template-columns: 1fr;
+        }
+
+        .callout .mark {
+          writing-mode: horizontal-tb;
+          transform: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="mast">
+        <div>
+          <p class="kicker">T3 Code · internals pamphlet</p>
+          <h1>The CLIs<br />hold the keys.</h1>
+        </div>
+        <p class="deck">
+          How T3 Code rides Claude, Codex, and Cursor subscriptions without becoming an API proxy.
+        </p>
+      </header>
+
+      <p class="lede">
+        T3 Code is a GUI and an orchestrator. It is <em>not</em> a man-in-the-middle for Anthropic,
+        OpenAI, or Cursor. When you hit send, the server starts (or resumes) a child process of the
+        vendor CLI you already installed and logged into. That process spends the subscription. T3
+        only speaks a local protocol over stdin/stdout.
+      </p>
+
+      <div class="callout">
+        <div class="mark">model</div>
+        <p>
+          Bring-your-own-subscription means: install <code>claude</code>, <code>codex</code>, or
+          <code>cursor-agent</code>; run their login command on the machine that hosts T3; then let
+          T3 spawn that binary. Tokens stay in the CLI’s home directory / OS keychain. The T3
+          process never presents them to api.anthropic.com, api.openai.com, or api.cursor.com.
+        </p>
+      </div>
+
+      <h2>One turn, five hops</h2>
+      <div class="flow">
+        <div class="step">
+          <span class="n">01</span>
+          <strong>Client</strong>
+          <span
+            >Web, desktop, or mobile dispatches <code>thread.turn.start</code> over the
+            authenticated WebSocket RPC.</span
+          >
+        </div>
+        <div class="step">
+          <span class="n">02</span>
+          <strong>Orchestration</strong>
+          <span
+            >Event-sourced engine persists the command. A reactor, not the UI, is allowed to touch a
+            provider.</span
+          >
+        </div>
+        <div class="step">
+          <span class="n">03</span>
+          <strong>Adapter</strong>
+          <span
+            ><code>ProviderService</code> resolves the thread’s instance and calls a generic
+            <code>startSession</code> / <code>sendTurn</code>.</span
+          >
+        </div>
+        <div class="step">
+          <span class="n">04</span>
+          <strong>Child CLI</strong>
+          <span
+            >Codex app-server, Claude Agent SDK subprocess, or <code>cursor-agent acp</code> — each
+            on stdio.</span
+          >
+        </div>
+        <div class="step">
+          <span class="n">05</span>
+          <strong>Vendor cloud</strong>
+          <span
+            >Only the CLI talks to the subscription backend, using credentials from
+            <code>codex login</code> / <code>claude auth login</code> /
+            <code>agent login</code>.</span
+          >
+        </div>
+      </div>
+      <div class="arrow-row">
+        <span>typed WS · packages/contracts</span>
+        <span>command → event → reactor</span>
+        <span>driver registry</span>
+        <span>local JSON-RPC / SDK IPC</span>
+        <span>not T3’s socket</span>
+      </div>
+
+      <div class="diagram" aria-hidden="true">
+        <svg viewBox="0 0 1080 220" xmlns="http://www.w3.org/2000/svg">
+          <rect x="16" y="28" width="200" height="84" fill="#14120f" />
+          <text
+            x="28"
+            y="54"
+            fill="#f4efe4"
+            font-family="IBM Plex Sans, Segoe UI, sans-serif"
+            font-size="13"
+          >
+            client
+          </text>
+          <text
+            x="28"
+            y="78"
+            fill="#ffb089"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="11"
+          >
+            orchestration.dispatch
+          </text>
+          <text
+            x="28"
+            y="96"
+            fill="#d4cbb6"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="11"
+          >
+            Command
+          </text>
+
+          <path d="M216 70 H268" stroke="#14120f" stroke-width="1.5" />
+          <polygon points="268,66 278,70 268,74" fill="#14120f" />
+
+          <rect x="278" y="28" width="230" height="84" fill="#ebe4d4" stroke="#14120f" />
+          <text
+            x="290"
+            y="54"
+            fill="#14120f"
+            font-family="IBM Plex Sans, Segoe UI, sans-serif"
+            font-size="13"
+          >
+            apps/server
+          </text>
+          <text
+            x="290"
+            y="78"
+            fill="#9a3208"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="11"
+          >
+            ProviderCommandReactor
+          </text>
+          <text
+            x="290"
+            y="96"
+            fill="#6b6458"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="11"
+          >
+            → ProviderAdapter
+          </text>
+
+          <path d="M508 70 H560" stroke="#14120f" stroke-width="1.5" />
+          <polygon points="560,66 570,70 560,74" fill="#14120f" />
+
+          <rect x="570" y="18" width="168" height="48" fill="#f7e5d6" stroke="#c45c26" />
+          <text
+            x="580"
+            y="47"
+            fill="#c45c26"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="12"
+          >
+            claude + SDK
+          </text>
+          <rect x="570" y="72" width="168" height="48" fill="#dceee4" stroke="#1f6b4a" />
+          <text
+            x="580"
+            y="101"
+            fill="#1f6b4a"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="12"
+          >
+            codex app-server
+          </text>
+          <rect x="570" y="126" width="168" height="48" fill="#dce6f4" stroke="#2b4f8a" />
+          <text
+            x="580"
+            y="155"
+            fill="#2b4f8a"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="12"
+          >
+            cursor-agent acp
+          </text>
+
+          <path d="M738 42 H790" stroke="#c45c26" stroke-width="1.5" />
+          <path d="M738 96 H790" stroke="#1f6b4a" stroke-width="1.5" />
+          <path d="M738 150 H790" stroke="#2b4f8a" stroke-width="1.5" />
+
+          <rect x="790" y="18" width="270" height="48" fill="#fffdf7" stroke="#c45c26" />
+          <text
+            x="802"
+            y="47"
+            fill="#14120f"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="12"
+          >
+            claude.ai / Anthropic API
+          </text>
+          <rect x="790" y="72" width="270" height="48" fill="#fffdf7" stroke="#1f6b4a" />
+          <text
+            x="802"
+            y="101"
+            fill="#14120f"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="12"
+          >
+            ChatGPT / Codex backend
+          </text>
+          <rect x="790" y="126" width="270" height="48" fill="#fffdf7" stroke="#2b4f8a" />
+          <text
+            x="802"
+            y="155"
+            fill="#14120f"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="12"
+          >
+            Cursor subscription API
+          </text>
+
+          <text
+            x="16"
+            y="200"
+            fill="#6b6458"
+            font-family="IBM Plex Mono, ui-monospace, monospace"
+            font-size="11"
+          >
+            T3 owns the left half. The vendor CLI owns the right half. The seam is a local child
+            process.
+          </text>
+        </svg>
+      </div>
+
+      <h2>Three wrappers, three dialects</h2>
+      <div class="providers">
+        <article class="card claude">
+          <header>
+            <h3>Claude</h3>
+            <span class="kind">claudeAgent</span>
+          </header>
+          <div class="body">
+            <p class="meta">
+              Not a long-lived JSON-RPC server. T3 embeds
+              <code>@anthropic-ai/claude-agent-sdk</code> and points it at your
+              <code>claude</code> binary.
+            </p>
+            <dl>
+              <dt>Spawn</dt>
+              <dd>SDK <code>query()</code> with <code>pathToClaudeCodeExecutable</code></dd>
+              <dt>Transport</dt>
+              <dd>Claude Code’s private IPC (SDK owns the subprocess)</dd>
+              <dt>Login</dt>
+              <dd><code>claude auth login</code></dd>
+              <dt>Auth isolation</dt>
+              <dd>
+                <code>CLAUDE_CONFIG_DIR</code> — never override <code>HOME</code> (breaks the macOS
+                keychain)
+              </dd>
+              <dt>Health check</dt>
+              <dd>
+                <code>claude --version</code>, then a no-prompt SDK init to read account /
+                subscription
+              </dd>
+            </dl>
+            <div class="proto">
+              <ol>
+                <li>resolve binary + config dir</li>
+                <li><code>query({ prompt, options })</code></li>
+                <li>preset system prompt: <code>claude_code</code></li>
+                <li>stream SDK messages → canonical events</li>
+                <li>permission callbacks come back through T3 UI</li>
+              </ol>
+            </div>
+          </div>
+        </article>
+
+        <article class="card codex">
+          <header>
+            <h3>Codex</h3>
+            <span class="kind">codex</span>
+          </header>
+          <div class="body">
+            <p class="meta">
+              T3 spawns the official Codex CLI in app-server mode and speaks its JSON-RPC over the
+              child’s stdio via <code>effect-codex-app-server</code>.
+            </p>
+            <dl>
+              <dt>Spawn</dt>
+              <dd><code>codex app-server</code> (+ optional launch args)</dd>
+              <dt>Transport</dt>
+              <dd>JSON-RPC on stdin/stdout</dd>
+              <dt>Login</dt>
+              <dd><code>codex login</code></dd>
+              <dt>Auth isolation</dt>
+              <dd>
+                <code>CODEX_HOME</code> (default <code>~/.codex</code>); shadow homes share history,
+                swap <code>auth.json</code>
+              </dd>
+              <dt>Health check</dt>
+              <dd>same app-server: <code>initialize</code> then <code>account/read</code></dd>
+            </dl>
+            <div class="proto">
+              <ol>
+                <li><code>initialize</code> as client <code>t3code_desktop</code></li>
+                <li><code>initialized</code> notification</li>
+                <li><code>thread/start</code> or <code>thread/resume</code></li>
+                <li><code>turn/start</code></li>
+                <li>
+                  listen for <code>thread/started</code>, <code>turn/started</code>, item deltas
+                </li>
+              </ol>
+            </div>
+          </div>
+        </article>
+
+        <article class="card cursor">
+          <header>
+            <h3>Cursor</h3>
+            <span class="kind">cursor</span>
+          </header>
+          <div class="body">
+            <p class="meta">
+              Cursor’s agent speaks the Agent Client Protocol. T3 is an ACP client; the CLI is the
+              ACP agent. Auth method id is literally <code>cursor_login</code>.
+            </p>
+            <dl>
+              <dt>Spawn</dt>
+              <dd><code>cursor-agent acp</code> (optional <code>-e &lt;apiEndpoint&gt;</code>)</dd>
+              <dt>Transport</dt>
+              <dd>ACP JSON-RPC on stdin/stdout (<code>effect-acp</code>)</dd>
+              <dt>Login</dt>
+              <dd><code>agent login</code> — not <code>cursor-agent login</code></dd>
+              <dt>Auth isolation</dt>
+              <dd>
+                whatever the Cursor CLI already stored; T3 just calls <code>authenticate</code>
+              </dd>
+              <dt>Health check</dt>
+              <dd><code>agent about</code>, plus ACP <code>list_available_models</code></dd>
+            </dl>
+            <div class="proto">
+              <ol>
+                <li><code>initialize</code> (protocolVersion 1)</li>
+                <li><code>authenticate { methodId: "cursor_login" }</code></li>
+                <li><code>session/new</code> or <code>session/load</code></li>
+                <li><code>session/prompt</code></li>
+                <li>
+                  extensions: <code>cursor/ask_question</code>, <code>cursor/create_plan</code>
+                </li>
+              </ol>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <hr class="rule" />
+
+      <div class="split">
+        <div>
+          <h2>The seam orchestration actually sees</h2>
+          <p>
+            Drivers are plain values in <code>BUILT_IN_DRIVERS</code>. Each one builds a
+            <code>ProviderInstance</code> with a snapshot, an adapter, and a small text-generation
+            helper. The adapter contract is the same for every vendor:
+          </p>
+          <p class="src">
+            startSession · sendTurn · interruptTurn<br />
+            respondToRequest · respondToUserInput<br />
+            stopSession · streamEvents
+          </p>
+          <p>
+            That is why the chat UI does not know or care whether the thread is Claude, Codex, or
+            Cursor. Approvals, streamed tokens, and session ids are normalized into
+            <code>ProviderRuntimeEvent</code>s, ingested by <code>ProviderRuntimeIngestion</code>,
+            and projected into the thread the client already subscribed to.
+          </p>
+          <p>
+            Complexity is supposed to live at this adapter boundary. Codex’s collab sub-agents,
+            Claude’s SDK message zoo, and Cursor’s ACP extensions all collapse into the same event
+            names before they cross the wire.
+          </p>
+        </div>
+        <div>
+          <div class="does">
+            <h2>What T3 does</h2>
+            <ul>
+              <li>Discover the binary on <code>PATH</code> or a configured path</li>
+              <li>Spawn it in the project cwd with a scoped env</li>
+              <li>Translate vendor events into orchestration commands</li>
+              <li>Relay approvals and user-input prompts back to the GUI</li>
+              <li>Checkpoint the git worktree around each turn</li>
+            </ul>
+          </div>
+          <div class="never" style="margin-top: 14px">
+            <h2>What T3 never does</h2>
+            <ul>
+              <li>Store or replay ChatGPT / Claude / Cursor session cookies as its own API key</li>
+              <li>Open an HTTPS connection to the model vendor on your behalf</li>
+              <li>Ship the vendor CLIs — you install them</li>
+              <li>Let the browser talk to a provider. The server is the execution boundary</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <hr class="rule" />
+
+      <h2>Where the subscription actually lives</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>You log in with</th>
+            <th>T3 points the child at</th>
+            <th>Second account</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Claude</td>
+            <td><code>claude auth login</code></td>
+            <td><code>CLAUDE_CONFIG_DIR</code> if set; otherwise Claude’s default config dir</td>
+            <td>another config dir + login; do not rewrite <code>HOME</code></td>
+          </tr>
+          <tr>
+            <td>Codex</td>
+            <td><code>codex login</code></td>
+            <td><code>CODEX_HOME</code> (often <code>~/.codex</code>)</td>
+            <td>shadow home that keeps its own <code>auth.json</code></td>
+          </tr>
+          <tr>
+            <td>Cursor</td>
+            <td><code>agent login</code></td>
+            <td>whatever <code>cursor-agent</code> already authenticated</td>
+            <td>ACP <code>authenticate</code> with <code>cursor_login</code></td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 14px; color: var(--mute); font-family: var(--ui); font-size: 14px">
+        Login happens on the machine running the T3 server, not on the phone or laptop you browse
+        from. A remote client is just another WebSocket subscriber. The child process, the tokens,
+        and the model call all stay on the host.
+      </p>
+
+      <footer>
+        <div>
+          Drawn from <code>docs/internals/providers.md</code>, the three <code>*Driver.ts</code> /
+          <code>*Adapter.ts</code> pairs, and <code>docs/user/install.md</code>. Grok and OpenCode
+          use the same driver SPI; they are omitted here only because you asked about the three
+          subscription CLIs.
+        </div>
+        <div class="src">
+          apps/server/src/provider/Drivers/{Claude,Codex,Cursor}Driver.ts<br />
+          apps/server/src/provider/Layers/{Claude,Codex,Cursor}Adapter.ts<br />
+          apps/server/src/provider/Layers/CodexSessionRuntime.ts<br />
+          apps/server/src/provider/acp/{AcpSessionRuntime,CursorAcpSupport}.ts
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>
