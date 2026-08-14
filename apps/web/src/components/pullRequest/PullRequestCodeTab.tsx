@@ -4,6 +4,7 @@ import type {
   EnvironmentId,
   PullRequestDetailView,
   PullRequestDiffSide,
+  PullRequestOmittedFileStat,
   PullRequestRef,
   PullRequestReviewThread,
 } from "@t3tools/contracts";
@@ -28,6 +29,8 @@ import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
+import { canEditPullRequestComment } from "./pullRequestEditing.logic";
+import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
   fnv1a32,
@@ -95,7 +98,19 @@ interface DiffSlice {
   readonly patch: string;
   readonly truncated: boolean;
   readonly nextCursor: string | null;
+  readonly omittedFileStats: ReadonlyArray<PullRequestOmittedFileStat>;
 }
+
+/**
+ * The viewer's own per-file counts are hidden and drawn from this side of its shadow root
+ * instead: its counts are hunk sums, and a file whose hunks the host withheld would read as
+ * an empty change rather than as the counts the host did report.
+ */
+const REPLACE_FILE_COUNTS_CSS = `
+[data-diffs-header] [data-additions-count],
+[data-diffs-header] [data-deletions-count] {
+  display: none !important;
+}`;
 
 /** Nothing loaded yet, as one identity, so the memos below do not see a new array every render. */
 const NO_SLICES: ReadonlyArray<DiffSlice> = [];
@@ -155,6 +170,7 @@ export function PullRequestCodeTab({
   selectedCommitOid,
   onSelectedCommitChange,
   pendingFinding,
+  fixFindingLabel = "Fix in a thread",
   onFixFinding,
   onAskAboutSelection,
   onRefresh,
@@ -168,6 +184,7 @@ export function PullRequestCodeTab({
   onSelectedCommitChange: (oid: string | null) => void;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
+  fixFindingLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
   /** Absent where a selection has no agent to go to, which takes the Ask button off the box. */
   onAskAboutSelection?: (input: PullRequestAskSelectionInput) => void;
@@ -246,6 +263,7 @@ export function PullRequestCodeTab({
         patch: data.patch,
         truncated: data.truncated,
         nextCursor: data.nextCursor,
+        omittedFileStats: data.omittedFileStats ?? [],
       };
       const index = slices.findIndex((slice) => slice.cursor === cursor);
       if (index === -1) {
@@ -256,7 +274,17 @@ export function PullRequestCodeTab({
         existing !== undefined &&
         existing.patch === next.patch &&
         existing.truncated === next.truncated &&
-        existing.nextCursor === next.nextCursor
+        existing.nextCursor === next.nextCursor &&
+        existing.omittedFileStats.length === next.omittedFileStats.length &&
+        existing.omittedFileStats.every((file, index) => {
+          const refreshed = next.omittedFileStats[index];
+          return (
+            refreshed !== undefined &&
+            refreshed.path === file.path &&
+            refreshed.additions === file.additions &&
+            refreshed.deletions === file.deletions
+          );
+        })
       ) {
         return previous;
       }
@@ -288,6 +316,9 @@ export function PullRequestCodeTab({
     reportFailure: false,
   });
   const setThreadResolution = useAtomCommand(pullRequestEnvironment.setThreadResolution, {
+    reportFailure: false,
+  });
+  const updateComment = useAtomCommand(pullRequestEnvironment.updateComment, {
     reportFailure: false,
   });
   const getDiffFileContents = useAtomCommand(pullRequestEnvironment.diffFileContents);
@@ -337,16 +368,12 @@ export function PullRequestCodeTab({
       }),
     [loadedSlices, resolvedTheme, scopeKey],
   );
-  // Sorted within a slice rather than across them: sorting the accumulated set would let a late
+  // Ordered within a slice rather than across them: ordering the accumulated set would let a late
   // slice push a file the reader is part way through further down the page.
   const files = useMemo(
     () =>
       parsedSlices.flatMap((parsed) =>
-        parsed?.kind === "files"
-          ? parsed.files.toSorted((left, right) =>
-              resolveFileDiffPath(left).localeCompare(resolveFileDiffPath(right)),
-            )
-          : [],
+        parsed?.kind === "files" ? orderDiffFiles(parsed.files) : [],
       ),
     [parsedSlices],
   );
@@ -449,7 +476,13 @@ export function PullRequestCodeTab({
                         }:${thread.comments
                           .map(
                             (comment) =>
-                              `${comment.id}:${comment.author?.login ?? ""}:${comment.createdAt}:${comment.body}`,
+                              `${comment.id}:${comment.author?.login ?? ""}:${comment.createdAt}:${comment.body}:${(
+                                comment.reactions ?? []
+                              )
+                                .map(
+                                  (r) => `${r.content}:${r.count}:${r.viewerHasReacted ? "v" : ""}`,
+                                )
+                                .join(",")}`,
                           )
                           .join(";")}`,
                     )
@@ -471,6 +504,15 @@ export function PullRequestCodeTab({
     ],
   );
   const lineStat = useMemo(() => getDiffLineStat(files), [files]);
+  const omittedFileStats = useMemo(
+    () =>
+      new Map(
+        loadedSlices.flatMap((slice) =>
+          slice.omittedFileStats.map((file) => [file.path, file] as const),
+        ),
+      ),
+    [loadedSlices],
+  );
   const fileKeys = useMemo(() => items.map((item) => item.id), [items]);
   const collapsedFileKeys = useMemo(
     () => new Set(items.filter((item) => item.collapsed === true).map((item) => item.id)),
@@ -626,13 +668,12 @@ export function PullRequestCodeTab({
       // chevron follows it rather than recomputing the default here.
       const collapsed = item.collapsed === true;
       return (
-        <button
-          type="button"
+        <Button
+          size="icon-micro"
+          variant="ghost-muted"
           aria-expanded={!collapsed}
           aria-label={collapsed ? "Expand diff" : "Collapse diff"}
-          className={cn(
-            "mr-1 inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground",
-          )}
+          className="mr-1 rounded hover:bg-transparent"
           onClick={(event) => {
             event.stopPropagation();
             toggleFile(item.id);
@@ -643,10 +684,34 @@ export function PullRequestCodeTab({
           ) : (
             <ChevronDownIcon className="size-4" />
           )}
-        </button>
+        </Button>
       );
     },
     [toggleFile],
+  );
+
+  const renderHeaderMetadata = useCallback(
+    (item: CodeViewItem<ReviewAnnotationGroup>) => {
+      if (item.type !== "diff") return null;
+      let additions = 0;
+      let deletions = 0;
+      for (const hunk of item.fileDiff.hunks) {
+        additions += hunk.additionLines;
+        deletions += hunk.deletionLines;
+      }
+      if (additions === 0 && deletions === 0) {
+        const withheld = omittedFileStats.get(resolveFileDiffPath(item.fileDiff));
+        if (withheld) ({ additions, deletions } = withheld);
+      }
+      return (
+        <PullRequestDiffStat
+          additions={additions}
+          deletions={deletions}
+          className="font-mono text-[11px]"
+        />
+      );
+    },
+    [omittedFileStats],
   );
 
   const diffViewOptions = useMemo(
@@ -699,19 +764,38 @@ export function PullRequestCodeTab({
   const renderThreadCard = useCallback(
     (thread: PullRequestReviewThread) => (
       <ReviewThreadCard
-        key={thread.id}
+        // Named with the pull request too: a thread's id is the host's own, and two pull requests
+        // can hand out the same one — which would leave one card's open editor standing over the
+        // other's conversation.
+        key={`${reference.projectId}#${reference.number}:${thread.id}`}
         thread={thread}
         workspaceRoot={detail.workspaceRoot}
         canReply={review.reply}
         canResolve={review.resolve}
+        canReact={detail.capabilities.reactions === true}
+        environmentId={environmentId}
+        reference={reference}
         pending={threadPending}
         fixPending={pendingFinding === pullRequestFindingKey({ kind: "thread", thread })}
+        fixLabel={fixFindingLabel}
         {...(onFixFinding ? { onFix: () => onFixFinding({ kind: "thread", thread }) } : {})}
         onReply={(body) =>
           runThreadCommand("Reply could not be posted", () =>
             replyToThread({
               environmentId,
               input: { ...reference, threadId: thread.id, body },
+            }),
+          )
+        }
+        // A conversation on a line is made of review comments, whatever the host filed them as.
+        canEditComment={(comment) =>
+          canEditPullRequestComment(detail, { author: comment.author, kind: "review-comment" })
+        }
+        onEditComment={(commentId, body) =>
+          runThreadCommand("The comment could not be saved", () =>
+            updateComment({
+              environmentId,
+              input: { ...reference, commentId, kind: "review-comment", body },
             }),
           )
         }
@@ -723,11 +807,14 @@ export function PullRequestCodeTab({
             }),
           )
         }
+        onReacted={onRefresh}
       />
     ),
     [
-      detail.workspaceRoot,
+      detail,
       environmentId,
+      fixFindingLabel,
+      onRefresh,
       onFixFinding,
       pendingFinding,
       reference,
@@ -737,12 +824,13 @@ export function PullRequestCodeTab({
       runThreadCommand,
       setThreadResolution,
       threadPending,
+      updateComment,
     ],
   );
 
   const renderAnnotation = useCallback(
     (annotation: ReviewAnnotation) => (
-      <div className="py-1">
+      <div className="py-1 font-sans text-foreground">
         {annotation.metadata.threads.map(renderThreadCard)}
         {annotation.metadata.pending.map((comment) => (
           <PendingReviewCommentCard
@@ -810,7 +898,7 @@ export function PullRequestCodeTab({
     review.verdicts.length === 0 ? null : (
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
         {reviewOpen ? (
-          <div className="chat-composer-glass pointer-events-auto absolute inset-x-3 bottom-3 rounded-xl border border-border/60 shadow-lg">
+          <div className="surface-glass pointer-events-auto absolute inset-x-3 bottom-3 rounded-xl border border-border/60 shadow-lg">
             <Button
               type="button"
               size="icon-sm"
@@ -834,10 +922,11 @@ export function PullRequestCodeTab({
         ) : (
           // Bottom-right, clear of the vertical scrollbar the diff view keeps to its own right
           // edge.
-          <button
-            type="button"
-            className="chat-composer-glass pointer-events-auto absolute bottom-3 right-4 flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1.5 text-xs font-medium shadow-lg"
+          <Button
+            className="pointer-events-auto absolute right-4 bottom-3 rounded-full shadow-lg"
             onClick={() => setReviewOpen(true)}
+            size="compact"
+            variant="glass"
           >
             <MessageSquareIcon className="size-3.5" />
             Review
@@ -846,7 +935,7 @@ export function PullRequestCodeTab({
                 {pendingComments.length}
               </span>
             ) : null}
-          </button>
+          </Button>
         )}
       </div>
     );
@@ -870,7 +959,7 @@ export function PullRequestCodeTab({
    * diff API offers it.
    */
   const toolbar = (
-    <div className="surface-subheader justify-between gap-2 px-4 text-xs text-muted-foreground">
+    <div className="flex h-10 min-h-10 shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-background px-4 text-xs text-muted-foreground">
       <div className="flex min-w-0 flex-1 items-center gap-3">
         {/* A host that reports no commits has nothing to scope by, and a dropdown whose only
             entry is the scope already showing is a control that does nothing. */}
@@ -1222,7 +1311,9 @@ export function PullRequestCodeTab({
             // is running out of diff.
             renderCodeViewFooter={renderCodeViewFooter}
             renderHeaderPrefix={renderHeaderPrefix}
+            renderHeaderMetadata={renderHeaderMetadata}
             renderAnnotation={renderAnnotation}
+            unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
           />
           {reviewOverlay}
         </div>
