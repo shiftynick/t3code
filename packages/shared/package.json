@@ -234,6 +234,10 @@
     "./quotaFormat": {
       "types": "./src/quotaFormat.ts",
       "import": "./src/quotaFormat.ts"
+    },
+    "./claudeCompaction": {
+      "types": "./src/claudeCompaction.ts",
+      "import": "./src/claudeCompaction.ts"
     }
   },
   "scripts": {
