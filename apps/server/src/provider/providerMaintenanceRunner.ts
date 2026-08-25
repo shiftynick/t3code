@@ -30,6 +30,10 @@ const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 
 const UPDATE_TIMEOUT_MS = 5 * 60_000;
 const UPDATE_OUTPUT_MAX_BYTES = 10_000;
+const CODEX_DRIVER = ProviderDriverKind.make("codex");
+const CODEX_NPM_UPDATE_ENVIRONMENT = {
+  NPM_CONFIG_MIN_RELEASE_AGE: "0",
+} satisfies NodeJS.ProcessEnv;
 
 export interface ProviderMaintenanceCommandResult {
   readonly stdout: string;
@@ -73,6 +77,7 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
     readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
     readonly command: string;
     readonly args: ReadonlyArray<string>;
+    readonly environment?: NodeJS.ProcessEnv;
   }) {
     const collectCommandResult = Effect.fn("ProviderMaintenanceRunner.collectCommandResult")(
       function* () {
@@ -83,7 +88,12 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
         // shell. On Linux/macOS (incl. the WSL backend) this is a no-op.
         const resolved = yield* resolveSpawnCommand(input.command, input.args);
         const child = yield* input.spawner
-          .spawn(ChildProcess.make(resolved.command, resolved.args, { shell: resolved.shell }))
+          .spawn(
+            ChildProcess.make(resolved.command, resolved.args, {
+              shell: resolved.shell,
+              ...(input.environment ? { env: input.environment, extendEnv: true } : {}),
+            }),
+          )
           .pipe(
             Effect.mapError(
               (cause) =>
@@ -201,11 +211,16 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
-  const runMaintenanceCommand = (command: string, args: ReadonlyArray<string>) =>
+  const runMaintenanceCommand = (
+    command: string,
+    args: ReadonlyArray<string>,
+    environment?: NodeJS.ProcessEnv,
+  ) =>
     runProviderMaintenanceCommandWithSpawner({
       spawner,
       command,
       args,
+      ...(environment ? { environment } : {}),
     });
   const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
     makeAlreadyRunningError: () =>
@@ -339,7 +354,17 @@ export const make = Effect.fn("ProviderMaintenanceRunner.make")(function* () {
               }),
             );
 
-            const result = yield* runMaintenanceCommand(update.executable, update.args);
+            // This fork keeps npm's seven-day package-age policy enabled globally. An explicit
+            // in-app Codex update is the narrow exception, scoped to this npm child process.
+            const updateEnvironment =
+              provider === CODEX_DRIVER && update.executable === "npm"
+                ? CODEX_NPM_UPDATE_ENVIRONMENT
+                : undefined;
+            const result = yield* runMaintenanceCommand(
+              update.executable,
+              update.args,
+              updateEnvironment,
+            );
             const finishedAt = yield* nowIso;
             if (result.timedOut || result.exitCode !== 0) {
               return yield* finish(

@@ -129,6 +129,10 @@ function mockSpawnerLayer(
   handler: (
     command: string,
     args: ReadonlyArray<string>,
+    options: {
+      readonly env?: NodeJS.ProcessEnv;
+      readonly extendEnv?: boolean;
+    },
   ) => {
     readonly stdout?: string;
     readonly stderr?: string;
@@ -142,8 +146,14 @@ function mockSpawnerLayer(
       const childProcess = command as unknown as {
         readonly command: string;
         readonly args: ReadonlyArray<string>;
+        readonly options: {
+          readonly env?: NodeJS.ProcessEnv;
+          readonly extendEnv?: boolean;
+        };
       };
-      return Effect.succeed(mockHandle(handler(childProcess.command, childProcess.args)));
+      return Effect.succeed(
+        mockHandle(handler(childProcess.command, childProcess.args, childProcess.options)),
+      );
     }),
   );
 }
@@ -330,6 +340,49 @@ describe("providerMaintenanceRunner", () => {
       );
     },
   );
+
+  it.effect("bypasses the npm release-age policy only for Codex updates", () => {
+    const calls: Array<{
+      readonly args: ReadonlyArray<string>;
+      readonly environment: NodeJS.ProcessEnv | undefined;
+      readonly extendEnv: boolean | undefined;
+    }> = [];
+    return Effect.gen(function* () {
+      const { registry } = yield* makeRegistry([baseProvider, baseOpenCodeProvider]);
+      const runner = yield* makeTestRunner(registry);
+
+      yield* runner.updateProvider(CODEX_DRIVER);
+      yield* runner.updateProvider(OPENCODE_DRIVER);
+
+      assert.deepStrictEqual(calls, [
+        {
+          args: ["install", "-g", "@openai/codex@latest"],
+          environment: { NPM_CONFIG_MIN_RELEASE_AGE: "0" },
+          extendEnv: true,
+        },
+        {
+          args: ["install", "-g", "opencode-ai@latest"],
+          environment: undefined,
+          extendEnv: undefined,
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NonWindowsPlatform,
+          latestVersionHttpClient("0.0.0"),
+          mockSpawnerLayer((_command, args, options) => {
+            calls.push({
+              args,
+              environment: options.env,
+              extendEnv: options.extendEnv,
+            });
+            return { stdout: "updated" };
+          }),
+        ),
+      ),
+    );
+  });
 
   it.effect("updates a single provider instance without touching sibling instances", () => {
     const calls: Array<{ command: string; args: ReadonlyArray<string> }> = [];
