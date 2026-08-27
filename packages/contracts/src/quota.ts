@@ -17,7 +17,7 @@ import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
  * client renders an empty panel when an environment reports an older version
  * rather than failing the whole sidebar.
  */
-export const QUOTA_CONTRACT_VERSION = 1 as const;
+export const QUOTA_CONTRACT_VERSION = 2 as const;
 
 export const QuotaProviderKind = Schema.Literals(["claude", "codex", "cursor"]);
 export type QuotaProviderKind = typeof QuotaProviderKind.Type;
@@ -44,6 +44,8 @@ export type QuotaWindow = typeof QuotaWindow.Type;
 
 export const QuotaProviderSnapshot = Schema.Struct({
   provider: QuotaProviderKind,
+  /** Opaque, provider-scoped identity used to collapse the same subscription across environments. */
+  accountFingerprint: Schema.NullOr(TrimmedNonEmptyString),
   planLabel: Schema.NullOr(TrimmedNonEmptyString),
   fetchedAt: Schema.NullOr(IsoDateTime),
   status: QuotaProviderStatus,

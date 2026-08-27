@@ -8,11 +8,35 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Result from "effect/Result";
 
 import {
+  createQuotaAccountFingerprint,
   isCursorAccessTokenExpiring,
+  parseClaudeAccountId,
   parseClaudeOauthCredential,
+  parseCodexAccountId,
   readCursorLocalAuth,
+  readJwtSubject,
   resolveCursorStateDbPath,
 } from "./QuotaService.ts";
+
+describe("quota account fingerprints", () => {
+  it("extracts stable provider account IDs and hashes them without exposing the source", () => {
+    expect(parseClaudeAccountId('{"oauthAccount":{"accountUuid":"claude-account"}}')).toBe(
+      "claude-account",
+    );
+    expect(parseCodexAccountId('{"tokens":{"account_id":"codex-account"}}')).toBe("codex-account");
+    const fingerprint = createQuotaAccountFingerprint("claude", "claude-account");
+    expect(fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(fingerprint).not.toContain("claude-account");
+    expect(createQuotaAccountFingerprint("codex", "claude-account")).not.toBe(fingerprint);
+    expect(createQuotaAccountFingerprint("claude", null)).toBeNull();
+  });
+
+  it("reads Cursor's stable JWT subject", () => {
+    const jwt = buildUnsignedJwt(1_900_000_000, "cursor-account");
+    expect(readJwtSubject(jwt)).toBe("cursor-account");
+    expect(readJwtSubject("not-a-jwt")).toBeNull();
+  });
+});
 
 describe("parseClaudeOauthCredential", () => {
   it("reads the subscription token without putting it in failure messages", () => {
@@ -87,7 +111,7 @@ describe("readCursorLocalAuth", () => {
     database.exec("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)");
     database
       .prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)")
-      .run("cursorAuth/accessToken", "secret-access-token");
+      .run("cursorAuth/accessToken", buildUnsignedJwt(1_900_000_000, "cursor-account"));
     database
       .prepare("INSERT INTO ItemTable (key, value) VALUES (?, ?)")
       .run("cursorAuth/refreshToken", "secret-refresh-token");
@@ -99,7 +123,7 @@ describe("readCursorLocalAuth", () => {
     const parsed = readCursorLocalAuth(databasePath);
     expect(Result.isSuccess(parsed)).toBe(true);
     if (Result.isSuccess(parsed)) {
-      expect(parsed.success.accessToken).toBe("secret-access-token");
+      expect(parsed.success.accountId).toBe("cursor-account");
       expect(parsed.success.refreshToken).toBe("secret-refresh-token");
       expect(parsed.success.planLabel).toBe("Pro");
     }
@@ -115,7 +139,8 @@ describe("readCursorLocalAuth", () => {
   });
 });
 
-function buildUnsignedJwt(expSeconds: number): string {
+function buildUnsignedJwt(expSeconds: number, subject?: string): string {
   const encode = (value: string) => Buffer.from(value, "utf8").toString("base64url");
-  return `${encode("{}")}.${encode(JSON.stringify({ exp: expSeconds }))}.sig`;
+  const payload = { exp: expSeconds, ...(subject ? { sub: subject } : {}) };
+  return [encode("{}"), encode(JSON.stringify(payload)), "sig"].join(".");
 }

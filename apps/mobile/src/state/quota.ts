@@ -6,7 +6,11 @@
  * @module state/quota
  */
 import { useAtomValue } from "@effect/atom-react";
-import { QUOTA_CONTRACT_VERSION, type EnvironmentId, type QuotaSnapshot } from "@t3tools/contracts";
+import {
+  dedupeEnvironmentQuotaStatuses,
+  type EnvironmentQuotaStatus,
+} from "@t3tools/client-runtime/quota";
+import { QUOTA_CONTRACT_VERSION } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback } from "react";
@@ -15,15 +19,9 @@ import { appAtomRegistry } from "./atom-registry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
 
-const EMPTY_QUOTA_INPUT = {} as const;
+export type { EnvironmentQuotaStatus } from "@t3tools/client-runtime/quota";
 
-export interface EnvironmentQuotaStatus {
-  readonly environmentId: EnvironmentId;
-  readonly label: string;
-  readonly isPending: boolean;
-  readonly error: string | null;
-  readonly snapshot: QuotaSnapshot | null;
-}
+const EMPTY_QUOTA_INPUT = {} as const;
 
 const quotaStatusesAtom = Atom.make((get): readonly EnvironmentQuotaStatus[] => {
   const presentations = get(environmentPresentations.presentationsAtom);
@@ -71,7 +69,7 @@ export function useQuota(): QuotaView {
   ).length;
 
   return {
-    environments,
+    environments: dedupeEnvironmentQuotaStatuses(environments),
     isPending: answeredCount === 0 && stillReporting > 0,
     isPartial: answeredCount > 0 && stillReporting > 0,
     refresh,

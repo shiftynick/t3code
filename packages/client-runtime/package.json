@@ -43,6 +43,10 @@
       "types": "./src/providerSkills.ts",
       "default": "./src/providerSkills.ts"
     },
+    "./quota": {
+      "types": "./src/quota.ts",
+      "default": "./src/quota.ts"
+    },
     "./relay": {
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"

@@ -20,5 +20,8 @@ signed in on that machine — the `cursor-agent` CLI login is not enough. Grok
 and OpenCode are not included.
 
 If you are connected to more than one environment, each environment reports its
-own remaining windows. Quota is never sent to a T3-owned server; the connected
-environment reads it locally and returns only percentages and reset times.
+own remaining windows. When multiple environments use the same provider
+subscription, T3 Code shows that subscription once. Distinct accounts remain
+separate. Quota is never sent to a T3-owned server; the connected environment
+reads it locally and returns percentages, reset times, and an opaque account
+fingerprint that cannot reveal the account identifier.

@@ -307,6 +307,7 @@ export function emptyProviderSnapshot(
 ): QuotaProviderSnapshot {
   return {
     provider,
+    accountFingerprint: null,
     planLabel: extras.planLabel ?? null,
     fetchedAt: extras.fetchedAt ?? null,
     status,

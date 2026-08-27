@@ -9,6 +9,7 @@
  *
  * @module QuotaService
  */
+import { createHash } from "node:crypto";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
@@ -193,6 +194,46 @@ interface CursorLocalAuth {
   readonly accessToken: string;
   readonly refreshToken: string;
   readonly planLabel: string | null;
+  readonly accountId: string | null;
+}
+
+function parseJsonRecord(raw: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(raw);
+    return value !== null && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseClaudeAccountId(raw: string): string | null {
+  const oauthAccount = parseJsonRecord(raw)?.oauthAccount;
+  if (oauthAccount === null || typeof oauthAccount !== "object" || Array.isArray(oauthAccount)) {
+    return null;
+  }
+  const accountUuid = (oauthAccount as Record<string, unknown>).accountUuid;
+  return typeof accountUuid === "string" && accountUuid.trim().length > 0
+    ? accountUuid.trim()
+    : null;
+}
+
+export function parseCodexAccountId(raw: string): string | null {
+  const tokens = parseJsonRecord(raw)?.tokens;
+  if (tokens === null || typeof tokens !== "object" || Array.isArray(tokens)) return null;
+  const accountId = (tokens as Record<string, unknown>).account_id;
+  return typeof accountId === "string" && accountId.trim().length > 0 ? accountId.trim() : null;
+}
+
+export function createQuotaAccountFingerprint(
+  provider: QuotaProviderKind,
+  accountId: string | null,
+): string | null {
+  if (accountId === null || accountId.trim().length === 0) return null;
+  return createHash("sha256")
+    .update(`t3-quota-account:v1\0${provider}\0${accountId.trim()}`)
+    .digest("hex");
 }
 
 export function resolveCursorStateDbPath(input: {
@@ -241,6 +282,19 @@ function readJwtExpiryMs(jwt: string): number | null {
   }
 }
 
+export function readJwtSubject(jwt: string): string | null {
+  const parts = jwt.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const payload = decodeJwtPayload(parts[1]!);
+    if (payload === null || typeof payload !== "object" || !("sub" in payload)) return null;
+    const subject = (payload as { sub?: unknown }).sub;
+    return typeof subject === "string" && subject.trim().length > 0 ? subject.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 function decodeJwtPayload(segment: string): unknown {
   const padded = segment.replace(/-/g, "+").replace(/_/g, "/");
   const pad = padded.length % 4 === 0 ? "" : "=".repeat(4 - (padded.length % 4));
@@ -280,6 +334,7 @@ export function readCursorLocalAuth(
       accessToken,
       refreshToken,
       planLabel: membershipType.length > 0 ? humanizeQuotaName(membershipType) : null,
+      accountId: readJwtSubject(accessToken),
     });
   } catch {
     return Result.fail(
@@ -301,6 +356,20 @@ const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const cache = new Map<QuotaProviderKind, QuotaCacheEntry>();
+
+  const readAccountFingerprint = Effect.fn("QuotaService.readAccountFingerprint")(function* (
+    provider: QuotaProviderKind,
+    candidatePaths: readonly string[],
+    parseAccountId: (raw: string) => string | null,
+  ) {
+    for (const candidatePath of candidatePaths) {
+      const raw = yield* fileSystem.readFileString(candidatePath).pipe(Effect.option);
+      if (Option.isNone(raw)) continue;
+      const fingerprint = createQuotaAccountFingerprint(provider, parseAccountId(raw.value));
+      if (fingerprint !== null) return fingerprint;
+    }
+    return null;
+  });
 
   const readSettings = Effect.fn("QuotaService.readSettings")(function* () {
     return yield* settingsService.getSettings.pipe(Effect.catchCause(() => Effect.succeed(null)));
@@ -353,6 +422,15 @@ const make = Effect.gen(function* () {
     if (Result.isFailure(credential)) {
       return cachedOr("claude", credential.failure, nowMs);
     }
+    const credentialDirectory = path.dirname(credentialPath);
+    const accountFingerprint = yield* readAccountFingerprint(
+      "claude",
+      [
+        path.join(credentialDirectory, ".claude.json"),
+        path.join(path.dirname(credentialDirectory), ".claude.json"),
+      ],
+      parseClaudeAccountId,
+    );
 
     const request = HttpClientRequest.get(CLAUDE_USAGE_URL).pipe(
       HttpClientRequest.bearerToken(credential.success.accessToken),
@@ -425,6 +503,7 @@ const make = Effect.gen(function* () {
     const fetchedAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     const snapshot: QuotaProviderSnapshot = {
       provider: "claude",
+      accountFingerprint,
       planLabel: credential.success.planLabel,
       fetchedAt,
       status: "ok",
@@ -460,6 +539,11 @@ const make = Effect.gen(function* () {
     }
 
     const layout = yield* resolveCodexHomeLayout(codexSettings);
+    const accountFingerprint = yield* readAccountFingerprint(
+      "codex",
+      [path.join(layout.effectiveHomePath ?? layout.sharedHomePath, "auth.json")],
+      parseCodexAccountId,
+    );
     const environment = {
       ...process.env,
       ...(layout.effectiveHomePath ? { CODEX_HOME: layout.effectiveHomePath } : {}),
@@ -549,6 +633,7 @@ const make = Effect.gen(function* () {
     const fetchedAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     const next: QuotaProviderSnapshot = {
       provider: "codex",
+      accountFingerprint,
       planLabel: parsed.planLabel,
       fetchedAt,
       status: "ok",
@@ -775,6 +860,7 @@ const make = Effect.gen(function* () {
     const fetchedAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
     const snapshot: QuotaProviderSnapshot = {
       provider: "cursor",
+      accountFingerprint: createQuotaAccountFingerprint("cursor", auth.success.accountId),
       planLabel: parsed.planLabel,
       fetchedAt,
       status: "ok",
