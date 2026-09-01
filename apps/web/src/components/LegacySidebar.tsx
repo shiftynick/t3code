@@ -1471,7 +1471,15 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return result;
       }
       const draftStore = useComposerDraftStore.getState();
-      releaseProjectDraftUploads(memberProjectRef);
+      releaseProjectDraftUploads(
+        memberProjectRef,
+        sidebarThreads
+          .filter(
+            (thread) =>
+              thread.environmentId === member.environmentId && thread.projectId === member.id,
+          )
+          .map((thread) => scopeThreadRef(thread.environmentId, thread.id)),
+      );
       const projectDraftThread = draftStore.getDraftThreadByProjectRef(memberProjectRef);
       if (projectDraftThread) {
         draftStore.clearDraftThread(projectDraftThread.draftId);
@@ -1479,7 +1487,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       draftStore.clearProjectDraftThreadId(memberProjectRef);
       return result;
     },
-    [deleteProject],
+    [deleteProject, sidebarThreads],
   );
 
   const handleRemoveProject = useCallback(
@@ -2157,10 +2165,20 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
+          { id: "project-settings", label: "Project settings" },
           { id: "delete", label: "Delete", destructive: true, icon: "trash" },
         ],
         position,
       );
+
+      if (clicked === "project-settings") {
+        if (isMobile) setOpenMobile(false);
+        void router.navigate({
+          to: "/projects/$projectKey",
+          params: { projectKey: project.projectKey },
+        });
+        return;
+      }
 
       if (clicked === "new-thread-on-branch") {
         // Explicit branch carry-over: reuse the thread's worktree when it
@@ -2244,9 +2262,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       copyThreadIdToClipboard,
       deleteThread,
       handleNewThread,
+      isMobile,
       markThreadUnread,
       memberProjectByScopedKey,
+      project.projectKey,
       project.workspaceRoot,
+      router,
+      setOpenMobile,
       startThreadRename,
     ],
   );

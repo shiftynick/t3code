@@ -91,7 +91,7 @@ import { EnvironmentId } from "./baseSchemas.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import type { ClientSettings } from "./settings.ts";
+import type { ClientSettings, QuitConfirmationMode } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type {
   SourceControlCloneRepositoryInput,
@@ -115,6 +115,10 @@ export interface ContextMenuItem<T extends string = string> {
   separatorBefore?: boolean;
   children?: readonly ContextMenuItem<T>[];
 }
+
+export type QuitShortcutHintEvent =
+  | { readonly state: "down"; readonly mode: Exclude<QuitConfirmationMode, "direct"> }
+  | { readonly state: "up" };
 
 export interface ContextMenuItemSchemaType {
   readonly id: string;
@@ -583,6 +587,12 @@ export interface DesktopPreviewTabState {
 export const DesktopPreviewTabIdSchema = Schema.String.check(Schema.isTrimmed()).check(
   Schema.isNonEmpty(),
 );
+
+export const DesktopPreviewAutomationStatusSchema = Schema.Struct({
+  ...PreviewAutomationStatus.fields,
+  tabId: Schema.NullOr(DesktopPreviewTabIdSchema),
+});
+export type DesktopPreviewAutomationStatus = typeof DesktopPreviewAutomationStatusSchema.Type;
 
 export const DesktopPreviewNavStatusSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("Idle") }),
@@ -1063,6 +1073,8 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
+  /** The desktop client's OS platform, read from Electron's preload process. */
+  getClientPlatform?: () => string;
   /**
    * The OS locale as a BCP-47 tag, which the renderer cannot read for itself:
    * the packaged app ships only the `en-US` Chromium locale pak, so
@@ -1132,11 +1144,10 @@ export interface DesktopBridge {
   probeRemoteEditors?: () => Promise<readonly EditorId[]>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   /**
-   * Hold-to-quit hint pushes: "down" when the quit shortcut is first pressed,
-   * "up" when it is released before the hold completes. Optional: older
-   * desktop builds never emit it.
+   * Quit-confirmation hint pushes. Optional: older desktop builds never emit
+   * them.
    */
-  onQuitShortcut?: (listener: (state: "down" | "up") => void) => () => void;
+  onQuitShortcut?: (listener: (event: QuitShortcutHintEvent) => void) => () => void;
   getWindowFullscreenState: () => boolean;
   onWindowFullscreenStateChange: (listener: (fullscreen: boolean) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
@@ -1151,6 +1162,9 @@ export interface DesktopBridge {
    */
   preview?: DesktopPreviewBridge;
 }
+
+/** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */
+export const DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER = "__t3DesktopPreviewRecordingCapture";
 
 export interface DesktopPreviewBridge {
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
@@ -1217,7 +1231,7 @@ export interface DesktopPreviewBridge {
     onFrame: (listener: (frame: DesktopPreviewRecordingFrame) => void) => () => void;
   };
   automation: {
-    status: (tabId: string) => Promise<PreviewAutomationStatus>;
+    status: (tabId: string) => Promise<DesktopPreviewAutomationStatus>;
     snapshot: (tabId: string) => Promise<PreviewAutomationSnapshot>;
     click: (tabId: string, input: PreviewAutomationClickInput) => Promise<void>;
     type: (tabId: string, input: PreviewAutomationTypeInput) => Promise<void>;
