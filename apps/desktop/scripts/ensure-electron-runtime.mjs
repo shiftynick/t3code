@@ -2,6 +2,8 @@ import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeProcess from "node:process";
+import * as NodeURL from "node:url";
 import * as NodeChildProcess from "node:child_process";
 
 const require = NodeModule.createRequire(import.meta.url);
@@ -100,19 +102,57 @@ function invalidRuntimePaths(electronDir, platformPath) {
   ].filter((runtimePath) => NodeFS.existsSync(runtimePath) && !isMachO(runtimePath));
 }
 
-function runChecked(command, args) {
+function runChecked(command, args, environment) {
   const result = NodeChildProcess.spawnSync(command, args, {
     encoding: "utf8",
     stdio: "inherit",
+    ...(environment ? { env: { ...NodeProcess.env, ...environment } } : {}),
   });
 
   if (result.status === 0) {
     return;
   }
 
+  const cause = result.error instanceof Error ? `: ${result.error.message}` : "";
   throw new Error(
-    `${command} ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}`,
+    `${command} ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}${cause}`,
   );
+}
+
+export function resolveArchiveExtractionCommand(platform, zipPath, destinationPath) {
+  if (platform === "darwin") {
+    return {
+      command: "ditto",
+      args: ["-x", "-k", zipPath, destinationPath],
+    };
+  }
+
+  if (platform === "win32") {
+    return {
+      command: "powershell.exe",
+      args: [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$ErrorActionPreference = 'Stop'; $archivePath = $env:T3CODE_ELECTRON_ARCHIVE_PATH; $destinationPath = $env:T3CODE_ELECTRON_DESTINATION_PATH; [System.IO.Directory]::CreateDirectory($destinationPath) | Out-Null; Expand-Archive -LiteralPath $archivePath -DestinationPath $destinationPath -Force",
+      ],
+      environment: {
+        T3CODE_ELECTRON_ARCHIVE_PATH: zipPath,
+        T3CODE_ELECTRON_DESTINATION_PATH: destinationPath,
+      },
+    };
+  }
+
+  return {
+    command: "python3",
+    args: [
+      "-c",
+      "import os, sys, zipfile; os.makedirs(sys.argv[2], exist_ok=True); zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])",
+      zipPath,
+      destinationPath,
+    ],
+  };
 }
 
 function installElectronRuntime(electronDir, version) {
@@ -126,16 +166,12 @@ function installElectronRuntime(electronDir, version) {
       "-o",
       zipPath,
     ]);
-    if (hostPlatform === "darwin") {
-      runChecked("ditto", ["-x", "-k", zipPath, NodePath.join(electronDir, "dist")]);
-    } else {
-      runChecked("python3", [
-        "-c",
-        "import os, sys, zipfile; os.makedirs(sys.argv[2], exist_ok=True); zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])",
-        zipPath,
-        NodePath.join(electronDir, "dist"),
-      ]);
-    }
+    const extraction = resolveArchiveExtractionCommand(
+      hostPlatform,
+      zipPath,
+      NodePath.join(electronDir, "dist"),
+    );
+    runChecked(extraction.command, extraction.args, extraction.environment);
   } finally {
     NodeFS.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -176,7 +212,7 @@ export function ensureElectronRuntime() {
   return electronPath;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && NodeURL.pathToFileURL(process.argv[1]).href === import.meta.url) {
   const electronPath = ensureElectronRuntime();
   process.stdout.write(`${electronPath}\n`);
 }
