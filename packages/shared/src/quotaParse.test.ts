@@ -109,7 +109,7 @@ describe("parseCodexRateLimits", () => {
     expect(parsed.windows[1]?.remainingPercent).toBe(65);
   });
 
-  it("hides the GPT-5.3-Codex bucket but keeps other provider buckets", () => {
+  it("hides GPT-5.3-Codex buckets but keeps other provider buckets", () => {
     const parsed = parseCodexRateLimits({
       rateLimits: {
         primary: {
@@ -154,7 +154,6 @@ describe("parseCodexRateLimits", () => {
     expect(parsed.windows.map((window) => window.label)).toEqual([
       "5-hour limit",
       "gpt-reserve · 7-day limit",
-      "GPT-5.3-Codex-Spark · 5-hour limit",
     ]);
   });
 });

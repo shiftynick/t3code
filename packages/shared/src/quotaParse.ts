@@ -22,13 +22,12 @@ const CLAUDE_KNOWN_WINDOWS: Readonly<
   seven_day_cowork: { order: 6, label: "7-day Cowork", durationMinutes: 10080 },
 };
 
-function isGpt53CodexLimitName(value: string): boolean {
-  return (
-    value
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]/g, "") === "gpt53codex"
-  );
+function isHiddenCodexModelLimitName(value: string): boolean {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "")
+    .startsWith("gpt53codex");
 }
 
 export function clampRemainingPercent(value: number): number {
@@ -194,7 +193,7 @@ export function parseCodexRateLimits(result: unknown): {
         typeof value.limitName === "string" && value.limitName.trim().length > 0
           ? value.limitName.trim()
           : humanizeQuotaName(name);
-      if (isGpt53CodexLimitName(label)) continue;
+      if (isHiddenCodexModelLimitName(label)) continue;
       addCodexLimitWindows(value, label, windows);
     }
   }

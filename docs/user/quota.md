@@ -12,8 +12,8 @@ Each provider can show a five-hour window, a weekly window, and extra limits the
 provider reports. Percentages are remaining, not used. A refresh button asks the
 environment for a new reading; recent readings are reused for a couple of
 minutes so the providers are not hammered. Codex's duplicate GPT-5.3-Codex
-model bucket is omitted; other provider-reported buckets, such as reserve
-capacity when available, can still appear.
+model buckets, including Spark, are omitted; other provider-reported buckets,
+such as reserve capacity when available, can still appear.
 
 Claude quota needs a Claude Code subscription sign-in on that machine. An API
 key or Bedrock setup has no subscription window to show. Codex quota needs the
