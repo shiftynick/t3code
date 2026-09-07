@@ -108,6 +108,55 @@ describe("parseCodexRateLimits", () => {
     expect(parsed.windows[0]?.remainingPercent).toBe(80);
     expect(parsed.windows[1]?.remainingPercent).toBe(65);
   });
+
+  it("hides the GPT-5.3-Codex bucket but keeps other provider buckets", () => {
+    const parsed = parseCodexRateLimits({
+      rateLimits: {
+        primary: {
+          usedPercent: 20,
+          windowDurationMins: 300,
+          resetsAt: 1785092400,
+        },
+      },
+      rateLimitsByLimitId: {
+        gpt53: {
+          limitName: "GPT-5.3-Codex",
+          primary: {
+            usedPercent: 35,
+            windowDurationMins: 300,
+            resetsAt: 1785092400,
+          },
+          secondary: {
+            usedPercent: 45,
+            windowDurationMins: 10080,
+            resetsAt: 1785697200,
+          },
+        },
+        reserve: {
+          limitName: "gpt-reserve",
+          primary: {
+            usedPercent: 10,
+            windowDurationMins: 10080,
+            resetsAt: 1785697200,
+          },
+        },
+        spark: {
+          limitName: "GPT-5.3-Codex-Spark",
+          primary: {
+            usedPercent: 15,
+            windowDurationMins: 300,
+            resetsAt: 1785092400,
+          },
+        },
+      },
+    });
+
+    expect(parsed.windows.map((window) => window.label)).toEqual([
+      "5-hour limit",
+      "gpt-reserve · 7-day limit",
+      "GPT-5.3-Codex-Spark · 5-hour limit",
+    ]);
+  });
 });
 
 describe("parseCursorPeriodUsage", () => {
