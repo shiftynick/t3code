@@ -2,7 +2,6 @@ import * as NodeFS from "node:fs";
 import * as NodeModule from "node:module";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeProcess from "node:process";
 import * as NodeURL from "node:url";
 import * as NodeChildProcess from "node:child_process";
 
@@ -212,6 +211,7 @@ export function ensureElectronRuntime() {
   return electronPath;
 }
 
+// `file://${argv[1]}` never matches on Windows (drive letters need `file:///C:/`).
 if (process.argv[1] && NodeURL.pathToFileURL(process.argv[1]).href === import.meta.url) {
   const electronPath = ensureElectronRuntime();
   process.stdout.write(`${electronPath}\n`);

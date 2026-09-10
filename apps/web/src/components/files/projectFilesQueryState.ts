@@ -4,6 +4,10 @@ import type {
   ProjectListEntriesResult,
   ProjectReadFileResult,
 } from "@t3tools/contracts";
+import {
+  isWorkspaceImagePreviewPath,
+  isWorkspaceVideoPreviewPath,
+} from "@t3tools/shared/filePreview";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -29,15 +33,8 @@ interface ProjectQueryState<A> {
   readonly refresh: () => void;
 }
 
-export function getProjectEntriesQueryAtom(
-  environmentId: EnvironmentId,
-  cwd: string,
-  includeIgnored = false,
-) {
-  return projectEnvironment.listEntries({
-    environmentId,
-    input: { cwd, ...(includeIgnored ? { includeIgnored: true } : {}) },
-  });
+function getProjectEntriesQueryAtom(environmentId: EnvironmentId, cwd: string) {
+  return projectEnvironment.listEntries({ environmentId, input: { cwd } });
 }
 
 export function getProjectFileQueryAtom(
@@ -186,9 +183,13 @@ export function useProjectFileQuery(
   relativePath: string | null,
   enabled = true,
 ): ProjectQueryState<ProjectReadFileResult> {
-  const atom = enabled
-    ? getProjectFileQueryAtom(environmentId, cwd, relativePath)
-    : EMPTY_PROJECT_FILE_QUERY_ATOM;
+  const isMedia =
+    relativePath !== null &&
+    (isWorkspaceImagePreviewPath(relativePath) || isWorkspaceVideoPreviewPath(relativePath));
+  const atom =
+    enabled && !isMedia
+      ? getProjectFileQueryAtom(environmentId, cwd, relativePath)
+      : EMPTY_PROJECT_FILE_QUERY_ATOM;
   const result = useAtomValue(atom);
   const refreshAtom = useAtomRefresh(atom);
   const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
