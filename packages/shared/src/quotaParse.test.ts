@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 
 import {
+  parseAntigravityUsageQuota,
   parseClaudeUsageWindows,
   parseCodexRateLimits,
   parseCursorPeriodUsage,
@@ -230,5 +231,94 @@ describe("parseCursorPeriodUsage", () => {
 
   it("returns no windows when plan usage is missing", () => {
     expect(parseCursorPeriodUsage({ billingCycleEnd: "1771077734000" }, "pro").windows).toEqual([]);
+  });
+});
+
+describe("parseAntigravityUsageQuota", () => {
+  it("parses CLI output with Gemini and 3P groups and sorts 5-hour before weekly", () => {
+    const parsed = parseAntigravityUsageQuota({
+      command: {
+        name: "usage",
+        data: {
+          groups: [
+            {
+              name: "Gemini Models",
+              buckets: [
+                {
+                  id: "gemini-weekly",
+                  name: "Weekly Limit Remaining",
+                  window: "weekly",
+                  remaining_fraction: 0.985,
+                  reset_time: "2026-09-20T13:32:13Z",
+                },
+                {
+                  id: "gemini-5h",
+                  name: "Five Hour Limit Remaining",
+                  window: "5h",
+                  remaining_fraction: 0.953,
+                  reset_time: "2026-09-13T18:32:13Z",
+                },
+              ],
+            },
+            {
+              name: "Claude and GPT models",
+              buckets: [
+                {
+                  id: "3p-weekly",
+                  name: "Weekly Limit Remaining",
+                  window: "weekly",
+                  remaining_fraction: 1.0,
+                  reset_time: "2026-09-20T13:34:43Z",
+                },
+                {
+                  id: "3p-5h",
+                  name: "Five Hour Limit Remaining",
+                  window: "5h",
+                  remaining_fraction: 0.8,
+                  reset_time: "2026-09-13T18:34:43Z",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(parsed.windows).toEqual([
+      {
+        id: "gemini-5h",
+        label: "Gemini · 5-hour limit",
+        remainingPercent: 95.3,
+        resetsAt: "2026-09-13T18:32:13.000Z",
+        durationMinutes: 300,
+      },
+      {
+        id: "gemini-weekly",
+        label: "Gemini · Weekly limit",
+        remainingPercent: 98.5,
+        resetsAt: "2026-09-20T13:32:13.000Z",
+        durationMinutes: 10080,
+      },
+      {
+        id: "3p-5h",
+        label: "Claude & GPT · 5-hour limit",
+        remainingPercent: 80,
+        resetsAt: "2026-09-13T18:34:43.000Z",
+        durationMinutes: 300,
+      },
+      {
+        id: "3p-weekly",
+        label: "Claude & GPT · Weekly limit",
+        remainingPercent: 100,
+        resetsAt: "2026-09-20T13:34:43.000Z",
+        durationMinutes: 10080,
+      },
+    ]);
+  });
+
+  it("handles empty or invalid payload", () => {
+    expect(parseAntigravityUsageQuota(null).windows).toEqual([]);
+    expect(parseAntigravityUsageQuota({}).windows).toEqual([]);
+    expect(parseAntigravityUsageQuota({ command: { data: { groups: [] } } }).windows).toEqual([]);
   });
 });

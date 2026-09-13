@@ -21,6 +21,7 @@ import {
 
 function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
+    sidebarQuotaExpanded: false,
     projectExpandedById: {},
     projectOrder: [],
     sidebarProjectScopeKey: null,
@@ -317,6 +318,7 @@ describe("uiStateStore persistence", () => {
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
     expect(persisted).toEqual({
+      sidebarQuotaExpanded: false,
       projectExpandedById: {
         logical: false,
       },

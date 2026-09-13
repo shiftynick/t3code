@@ -1,11 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Cursor state.vscdb lives at OS-specific app-data paths; sqlite is opened read-only with node:sqlite.
 /**
- * QuotaService - reads Claude, Codex, and Cursor subscription remaining windows.
+ * QuotaService - reads Claude, Codex, Cursor, and Antigravity subscription remaining windows.
  *
  * Claude uses the signed-in OAuth credential and Anthropic's usage endpoint.
  * Codex is queried through a short-lived `codex app-server` process. Cursor
  * reads the desktop app's local SQLite sign-in read-only and calls Cursor's
- * usage API. Tokens and raw provider payloads never leave this module.
+ * usage API. Antigravity queries the local `agy` CLI in print-mode. Tokens and
+ * raw provider payloads never leave this module.
  *
  * @module QuotaService
  */
@@ -41,6 +42,7 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import {
   emptyProviderSnapshot,
   humanizeQuotaName,
+  parseAntigravityUsageQuota,
   parseClaudeUsageWindows,
   parseCodexRateLimits,
   parseCursorPeriodUsage,
@@ -52,6 +54,7 @@ import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "../provider/Layers/codexLaunchArgs.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 import packageJson from "../../package.json" with { type: "json" };
 import {
   parseRetryAfterMs,
@@ -64,8 +67,11 @@ const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 const CLAUDE_REQUEST_TIMEOUT_MS = 15_000;
 const CODEX_REQUEST_TIMEOUT_MS = 20_000;
 const CODEX_FORCE_KILL_AFTER = "2 seconds" as const;
+const ANTIGRAVITY_REQUEST_TIMEOUT_MS = 15_000;
+const ANTIGRAVITY_FORCE_KILL_AFTER = "2 seconds" as const;
 const CURSOR_USAGE_URL =
   "https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
+const decodeUnknownJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const CURSOR_TOKEN_URL = "https://api2.cursor.sh/oauth/token";
 const CURSOR_OAUTH_CLIENT_ID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
 const CURSOR_REQUEST_TIMEOUT_MS = 15_000;
@@ -871,19 +877,193 @@ const make = Effect.gen(function* () {
     return snapshot;
   });
 
+  const readAntigravity = Effect.fn("QuotaService.readAntigravity")(function* (refresh: boolean) {
+    const nowMs = yield* Clock.currentTimeMillis;
+    const cached = cache.get("antigravity");
+    if (shouldUseCachedSnapshot({ cached, nowMs, refresh })) {
+      if (cached!.rateLimitedUntilMs > nowMs) {
+        return markCached(
+          cached!.snapshot,
+          "rateLimited",
+          "Antigravity is rate limiting quota checks. Showing the last reading.",
+        );
+      }
+      return cached!.snapshot;
+    }
+
+    const settings = yield* readSettings();
+    const antigravitySettings = settings?.providers.antigravity;
+    const configuredBinary = antigravitySettings?.binaryPath?.trim();
+    const candidates = [
+      ...(configuredBinary && configuredBinary.length > 0 ? [configuredBinary] : []),
+      "agy",
+      NodePath.join(NodeOS.homedir(), ".local", "bin", "agy"),
+    ];
+
+    let spawnSpec: {
+      readonly command: string;
+      readonly args: ReadonlyArray<string>;
+      readonly shell: boolean;
+    } | null = null;
+
+    for (const candidate of candidates) {
+      const resolved = yield* resolveSpawnCommand(
+        candidate,
+        ["-p", "/usage", "--output-format", "json"],
+        { env: process.env, extendEnv: true },
+      ).pipe(Effect.orElseSucceed(() => null));
+      if (resolved !== null) {
+        spawnSpec = resolved;
+        break;
+      }
+    }
+
+    if (spawnSpec === null) {
+      return cachedOr(
+        "antigravity",
+        emptyProviderSnapshot(
+          "antigravity",
+          "unavailable",
+          "Antigravity CLI (agy) is not installed or not on PATH.",
+        ),
+        nowMs,
+      );
+    }
+
+    const installationIdPath = NodePath.join(
+      NodeOS.homedir(),
+      ".gemini",
+      "antigravity-cli",
+      "installation_id",
+    );
+    const accountFingerprint = yield* fileSystem.readFileString(installationIdPath).pipe(
+      Effect.map((text) => createQuotaAccountFingerprint("antigravity", text.trim())),
+      Effect.orElseSucceed(() => null),
+    );
+
+    const execResult = yield* Effect.gen(function* () {
+      const child = yield* spawner.spawn(
+        ChildProcess.make(spawnSpec.command, spawnSpec.args, {
+          cwd: process.cwd(),
+          env: process.env,
+          extendEnv: true,
+          forceKillAfter: ANTIGRAVITY_FORCE_KILL_AFTER,
+          shell: spawnSpec.shell,
+        }),
+      );
+
+      const [stdout, stderr, exitCode] = yield* Effect.all(
+        [
+          collectUint8StreamText({ stream: child.stdout, maxBytes: 1024 * 1024 }),
+          collectUint8StreamText({ stream: child.stderr, maxBytes: 64 * 1024 }),
+          child.exitCode,
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      return {
+        stdout: stdout.text,
+        stderr: stderr.text,
+        exitCode: Number(exitCode),
+      };
+    }).pipe(
+      Effect.scoped,
+      Effect.timeoutOption(Duration.millis(ANTIGRAVITY_REQUEST_TIMEOUT_MS)),
+      Effect.result,
+    );
+
+    if (Result.isFailure(execResult)) {
+      return cachedOr(
+        "antigravity",
+        emptyProviderSnapshot("antigravity", "failed", "Antigravity quota request failed."),
+        nowMs,
+      );
+    }
+
+    if (Option.isNone(execResult.success)) {
+      return cachedOr(
+        "antigravity",
+        emptyProviderSnapshot("antigravity", "failed", "Antigravity quota request timed out."),
+        nowMs,
+      );
+    }
+
+    const processOutput = execResult.success.value;
+    if (processOutput.exitCode !== 0) {
+      const combined = `${processOutput.stderr}\n${processOutput.stdout}`.toLowerCase();
+      if (
+        combined.includes("not logged in") ||
+        combined.includes("authentication required") ||
+        combined.includes("please sign in") ||
+        combined.includes("cannot complete interactive login") ||
+        combined.includes("unauthenticated")
+      ) {
+        return cachedOr(
+          "antigravity",
+          emptyProviderSnapshot(
+            "antigravity",
+            "unauthenticated",
+            "Sign in to Antigravity with 'agy' to view quota.",
+          ),
+          nowMs,
+        );
+      }
+      return cachedOr(
+        "antigravity",
+        emptyProviderSnapshot("antigravity", "failed", "Antigravity quota request failed."),
+        nowMs,
+      );
+    }
+
+    const parsedJsonOption = decodeUnknownJson(processOutput.stdout);
+    if (Option.isNone(parsedJsonOption)) {
+      return cachedOr(
+        "antigravity",
+        emptyProviderSnapshot("antigravity", "failed", "Antigravity returned invalid quota data."),
+        nowMs,
+      );
+    }
+
+    const parsed = parseAntigravityUsageQuota(parsedJsonOption.value);
+    if (parsed.windows.length === 0) {
+      return cachedOr(
+        "antigravity",
+        emptyProviderSnapshot(
+          "antigravity",
+          "unauthenticated",
+          "Antigravity returned no quota windows. Check 'agy' sign-in.",
+        ),
+        nowMs,
+      );
+    }
+
+    const fetchedAt = DateTime.formatIso(DateTime.makeUnsafe(nowMs));
+    const snapshot: QuotaProviderSnapshot = {
+      provider: "antigravity",
+      accountFingerprint,
+      planLabel: parsed.planLabel,
+      fetchedAt,
+      status: "ok",
+      message: null,
+      windows: parsed.windows,
+    };
+    storeSuccess(snapshot, nowMs);
+    return snapshot;
+  });
+
   const readSnapshot = Effect.fn("QuotaService.readSnapshot")(function* (
     input: QuotaSnapshotInput,
   ) {
     const refresh = input.refresh === true;
-    const [claude, codex, cursor] = yield* Effect.all(
-      [readClaude(refresh), readCodex(refresh), readCursor(refresh)],
+    const [claude, codex, cursor, antigravity] = yield* Effect.all(
+      [readClaude(refresh), readCodex(refresh), readCursor(refresh), readAntigravity(refresh)],
       { concurrency: "unbounded" },
     );
     const readAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
     return {
       contractVersion: QUOTA_CONTRACT_VERSION,
       readAt,
-      providers: [claude, codex, cursor],
+      providers: [claude, codex, cursor, antigravity],
     } satisfies QuotaSnapshot;
   });
 

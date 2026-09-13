@@ -1,10 +1,10 @@
 /**
  * Subscription quota remaining.
  *
- * Each environment reads Claude, Codex, and Cursor subscription windows from
- * the provider CLIs' own credentials / app-server, or from the Cursor app's
- * local sign-in. Percentages and reset times cross the wire; tokens, raw
- * provider payloads, and credential material do not.
+ * Each environment reads Claude, Codex, Cursor, and Antigravity subscription
+ * windows from the provider CLIs' own credentials / app-server, or from the
+ * Cursor app's local sign-in. Percentages and reset times cross the wire;
+ * tokens, raw provider payloads, and credential material do not.
  *
  * @module quota
  */
@@ -19,7 +19,7 @@ import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas.ts";
  */
 export const QUOTA_CONTRACT_VERSION = 2 as const;
 
-export const QuotaProviderKind = Schema.Literals(["claude", "codex", "cursor"]);
+export const QuotaProviderKind = Schema.Literals(["claude", "codex", "cursor", "antigravity"]);
 export type QuotaProviderKind = typeof QuotaProviderKind.Type;
 
 export const QuotaProviderStatus = Schema.Literals([

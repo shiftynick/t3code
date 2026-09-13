@@ -3,6 +3,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./quotaFormat": {
+      "types": "./src/quotaFormat.ts",
+      "import": "./src/quotaFormat.ts"
+    },
+    "./quotaParse": {
+      "types": "./src/quotaParse.ts",
+      "import": "./src/quotaParse.ts"
+    },
     "./themePalettes": {
       "types": "./src/themePalettes.ts",
       "import": "./src/themePalettes.ts"

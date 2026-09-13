@@ -28,6 +28,7 @@ describe("quota account fingerprints", () => {
     expect(fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(fingerprint).not.toContain("claude-account");
     expect(createQuotaAccountFingerprint("codex", "claude-account")).not.toBe(fingerprint);
+    expect(createQuotaAccountFingerprint("antigravity", "claude-account")).not.toBe(fingerprint);
     expect(createQuotaAccountFingerprint("claude", null)).toBeNull();
   });
 

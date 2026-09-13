@@ -14,6 +14,7 @@ const PROVIDER_LABEL: Record<QuotaProviderKind, string> = {
   claude: "Claude",
   codex: "Codex",
   cursor: "Cursor",
+  antigravity: "Antigravity",
 };
 
 export function QuotaRouteScreen() {

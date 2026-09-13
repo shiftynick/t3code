@@ -308,6 +308,121 @@ function buildCursorIncludedWindow(
   };
 }
 
+function simplifyAntigravityGroupName(groupName: string): string {
+  const trimmed = groupName.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("gemini")) return "Gemini";
+  if (lower.includes("claude") && lower.includes("gpt")) return "Claude & GPT";
+  return humanizeQuotaName(trimmed.replace(/\s+models$/i, ""));
+}
+
+function parseAntigravityWindowLabel(
+  window: string,
+  name?: string,
+): {
+  readonly label: string;
+  readonly durationMinutes: number | null;
+} {
+  const windowLower = window.trim().toLowerCase();
+  if (windowLower === "5h" || windowLower.includes("5-hour") || windowLower.includes("5 hour")) {
+    return { label: "5-hour limit", durationMinutes: 300 };
+  }
+  if (windowLower === "weekly" || windowLower === "7d" || windowLower.includes("week")) {
+    return { label: "Weekly limit", durationMinutes: 10080 };
+  }
+  if (typeof name === "string" && name.trim().length > 0) {
+    const cleaned = humanizeQuotaName(
+      name.replace(/\s*limit\s*remaining/i, "").replace(/\s*remaining/i, ""),
+    );
+    return { label: `${cleaned} limit`, durationMinutes: null };
+  }
+  return { label: humanizeQuotaName(window), durationMinutes: null };
+}
+
+export function parseAntigravityUsageQuota(root: unknown): {
+  readonly planLabel: string | null;
+  readonly windows: readonly QuotaWindow[];
+} {
+  if (!isRecord(root)) {
+    return { planLabel: null, windows: [] };
+  }
+
+  let groupsData: unknown = null;
+  if (Array.isArray(root.groups)) {
+    groupsData = root.groups;
+  } else if (isRecord(root.data) && Array.isArray(root.data.groups)) {
+    groupsData = root.data.groups;
+  } else if (
+    isRecord(root.command) &&
+    isRecord(root.command.data) &&
+    Array.isArray(root.command.data.groups)
+  ) {
+    groupsData = root.command.data.groups;
+  }
+
+  if (!Array.isArray(groupsData)) {
+    return { planLabel: null, windows: [] };
+  }
+
+  const windows: QuotaWindow[] = [];
+
+  for (const group of groupsData) {
+    if (!isRecord(group)) continue;
+    const groupName = typeof group.name === "string" ? group.name.trim() : "";
+    const groupPrefix = groupName.length > 0 ? simplifyAntigravityGroupName(groupName) : "";
+    const buckets = group.buckets;
+    if (!Array.isArray(buckets)) continue;
+
+    for (const bucket of buckets) {
+      if (!isRecord(bucket)) continue;
+      const fraction = readFiniteNumber(bucket.remaining_fraction);
+      if (fraction === null) continue;
+
+      const remainingPercent = clampRemainingPercent(fraction * 100);
+      const resetsAt = readIsoTimestamp(bucket.reset_time);
+      const windowStr = typeof bucket.window === "string" ? bucket.window : "";
+      const bucketName = typeof bucket.name === "string" ? bucket.name : undefined;
+      const { label: windowLabel, durationMinutes } = parseAntigravityWindowLabel(
+        windowStr,
+        bucketName,
+      );
+
+      const label = groupPrefix.length > 0 ? `${groupPrefix} · ${windowLabel}` : windowLabel;
+      const bucketId =
+        typeof bucket.id === "string" && bucket.id.trim().length > 0
+          ? bucket.id.trim()
+          : `${groupPrefix.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${windowStr}`;
+
+      windows.push({
+        id: bucketId,
+        label,
+        remainingPercent,
+        resetsAt,
+        durationMinutes,
+      });
+    }
+  }
+
+  // Sort windows: Gemini first, Claude & GPT next; shorter duration before longer
+  windows.sort((a, b) => {
+    const aIsGemini = a.label.toLowerCase().includes("gemini");
+    const bIsGemini = b.label.toLowerCase().includes("gemini");
+    if (aIsGemini && !bIsGemini) return -1;
+    if (!aIsGemini && bIsGemini) return 1;
+
+    const durA = a.durationMinutes ?? Number.POSITIVE_INFINITY;
+    const durB = b.durationMinutes ?? Number.POSITIVE_INFINITY;
+    if (durA !== durB) return durA - durB;
+
+    return a.label.localeCompare(b.label);
+  });
+
+  return {
+    planLabel: null,
+    windows,
+  };
+}
+
 export function emptyProviderSnapshot(
   provider: QuotaProviderSnapshot["provider"],
   status: QuotaProviderSnapshot["status"],

@@ -16,12 +16,14 @@ const PROVIDER_LABEL: Record<QuotaProviderKind, string> = {
   claude: "Claude",
   codex: "Codex",
   cursor: "Cursor",
+  antigravity: "Antigravity",
 };
 
 const PROVIDER_BAR_CLASS: Record<QuotaProviderKind, string> = {
   claude: "bg-[#d97757]",
   codex: "bg-sidebar-foreground/70",
   cursor: "bg-[#5b8def]",
+  antigravity: "bg-[#34a853]",
 };
 
 export const SidebarQuotaSection = memo(function SidebarQuotaSection() {
