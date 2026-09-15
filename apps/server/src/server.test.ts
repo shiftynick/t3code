@@ -1059,8 +1059,8 @@ const buildAppUnderTest = (options?: {
 
     const appLayer = servedRoutesLayer.pipe(
       Layer.provide(resourceTelemetryLayer),
-      Layer.provide(UsageService.layerTest),
-      Layer.provide(QuotaService.layerTest),
+      // Merge to stay within Layer.provide's 20-argument limit after QuotaService.
+      Layer.provide(Layer.mergeAll(UsageService.layerTest, QuotaService.layerTest)),
       Layer.provide(
         Layer.mock(AnalyticsService.AnalyticsService)({
           record: () => Effect.void,

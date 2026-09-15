@@ -129,7 +129,10 @@ function mockSpawnerLayer(
   handler: (
     command: string,
     args: ReadonlyArray<string>,
-    options: { readonly env?: NodeJS.ProcessEnv | undefined },
+    options: {
+      readonly env?: NodeJS.ProcessEnv | undefined;
+      readonly extendEnv?: boolean | undefined;
+    },
   ) => {
     readonly stdout?: string;
     readonly stderr?: string;
@@ -143,7 +146,10 @@ function mockSpawnerLayer(
       const childProcess = command as unknown as {
         readonly command: string;
         readonly args: ReadonlyArray<string>;
-        readonly options: { readonly env?: NodeJS.ProcessEnv | undefined };
+        readonly options: {
+          readonly env?: NodeJS.ProcessEnv | undefined;
+          readonly extendEnv?: boolean | undefined;
+        };
       };
       return Effect.succeed(
         mockHandle(handler(childProcess.command, childProcess.args, childProcess.options)),
