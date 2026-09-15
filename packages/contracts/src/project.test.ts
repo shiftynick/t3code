@@ -2,7 +2,6 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  ProjectListEntriesInput,
   ProjectReadFileError,
   ProjectSearchContentsError,
   ProjectSearchContentsInput,
@@ -13,16 +12,8 @@ import {
 
 const decodeSearchEntriesInput = Schema.decodeUnknownSync(ProjectSearchEntriesInput);
 const decodeSearchContentsInput = Schema.decodeUnknownSync(ProjectSearchContentsInput);
-const decodeListEntriesInput = Schema.decodeUnknownSync(ProjectListEntriesInput);
 
 describe("project search inputs", () => {
-  it("accepts an opt-in ignored-file listing", () => {
-    expect(decodeListEntriesInput({ cwd: "/workspace", includeIgnored: true })).toEqual({
-      cwd: "/workspace",
-      includeIgnored: true,
-    });
-  });
-
   it("allows an empty entries query for bounded frecency browsing", () => {
     const decoded = decodeSearchEntriesInput({
       cwd: "/workspace",

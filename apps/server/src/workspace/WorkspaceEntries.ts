@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import type {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
+  ProjectEntry,
   ProjectListEntriesInput,
   ProjectListEntriesResult,
   ProjectSearchContentsInput,
@@ -23,6 +24,7 @@ import { isExplicitRelativePath, isWindowsAbsolutePath } from "@t3tools/shared/p
 import { normalizeSearchQuery } from "@t3tools/shared/searchRanking";
 
 import { expandHomePathWith } from "../pathExpansion.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
 import * as WorkspaceSearchIndex from "./WorkspaceSearchIndex.ts";
 
@@ -74,6 +76,7 @@ export const WorkspaceEntriesBrowseError = Schema.Union([
 export type WorkspaceEntriesBrowseError = typeof WorkspaceEntriesBrowseError.Type;
 
 export const WorkspaceEntriesError = Schema.Union([
+  WorkspaceEntriesReadDirectoryError,
   WorkspacePaths.WorkspaceRootNotExistsError,
   WorkspacePaths.WorkspaceRootCreateFailedError,
   WorkspacePaths.WorkspaceRootStatFailedError,
@@ -133,7 +136,7 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
   const workspaceSearchIndexes = yield* WorkspaceSearchIndex.WorkspaceSearchIndexMap;
-  const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
+  const vcsProcess = yield* VcsProcess.VcsProcess;
 
   const normalizeWorkspaceRoot = Effect.fn("WorkspaceEntries.normalizeWorkspaceRoot")(function* (
     cwd: string,
@@ -267,28 +270,77 @@ export const make = Effect.gen(function* () {
   const list: WorkspaceEntries["Service"]["list"] = Effect.fn("WorkspaceEntries.list")(
     function* (input) {
       const normalizedCwd = yield* normalizeWorkspaceRoot(input.cwd);
-      if (input.includeIgnored) {
-        const ignoredEntries = yield* Effect.gen(function* () {
-          const vcs = yield* vcsRegistry.detect({ cwd: normalizedCwd });
-          if (!vcs) return null;
-          const result = yield* vcs.driver.listWorkspaceFiles(normalizedCwd, {
-            includeIgnored: true,
+      if (input.directoryPath !== undefined) {
+        const directoryPath = input.directoryPath;
+        const toError = (cause: unknown) =>
+          new WorkspaceEntriesReadDirectoryError({
+            cwd: normalizedCwd,
+            partialPath: directoryPath,
+            parentPath: path.resolve(normalizedCwd, directoryPath),
+            cause,
           });
-          const entries = toProjectEntries(result.paths);
-          return { ...entries, truncated: result.truncated || entries.truncated };
-        }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new WorkspaceSearchIndex.WorkspaceSearchIndexSearchFailed({
-                cwd: normalizedCwd,
-                queryLength: 0,
-                pageSize: WORKSPACE_LIST_MAX_ENTRIES,
-                reason: "VCS workspace listing failed.",
-                cause,
-              }),
+        const target =
+          directoryPath === ""
+            ? { absolutePath: normalizedCwd, relativePath: "" }
+            : yield* workspacePaths
+                .resolveRelativePathWithinRoot({
+                  workspaceRoot: normalizedCwd,
+                  relativePath: directoryPath,
+                })
+                .pipe(Effect.mapError(toError));
+        const entries = yield* Effect.tryPromise({
+          try: async () => {
+            const root = await NodeFSP.realpath(normalizedCwd);
+            const directory = await NodeFSP.realpath(target.absolutePath);
+            const relative = path.relative(root, directory);
+            if (
+              relative === ".." ||
+              relative.startsWith(`..${path.sep}`) ||
+              path.isAbsolute(relative) ||
+              relative.split(path.sep).includes(".git") ||
+              target.relativePath.split("/").includes(".git")
+            ) {
+              throw new Error("Directory must be inside the workspace and outside .git.");
+            }
+            const children = await NodeFSP.readdir(directory, { withFileTypes: true });
+            return children.flatMap((child): ProjectEntry[] => {
+              if (child.name === ".git" || (!child.isDirectory() && !child.isFile())) return [];
+              return [
+                {
+                  path: target.relativePath ? `${target.relativePath}/${child.name}` : child.name,
+                  kind: child.isDirectory() ? "directory" : "file",
+                },
+              ];
+            });
+          },
+          catch: toError,
+        });
+        // Use stdin so large directories cannot exceed the command-line argument limit.
+        // Ignore classification is optional in non-git workspaces or when git is unavailable.
+        const ignored = new Set<string>();
+        for (let offset = 0; offset < entries.length; offset += 1000) {
+          const chunk = entries.slice(offset, offset + 1000);
+          const result = yield* vcsProcess
+            .run({
+              operation: "WorkspaceEntries.list",
+              command: "git",
+              args: ["-c", "core.fsmonitor=false", "check-ignore", "-z", "--stdin"],
+              cwd: normalizedCwd,
+              stdin: `${chunk.map((entry) => entry.path).join("\0")}\0`,
+              allowNonZeroExit: true,
+              timeoutMs: 10_000,
+              maxOutputBytes: 16 * 1024 * 1024,
+            })
+            .pipe(Effect.orElseSucceed(() => undefined));
+          if (!result || (result.exitCode !== 0 && result.exitCode !== 1)) break;
+          for (const ignoredPath of result.stdout.split("\0")) ignored.add(ignoredPath);
+        }
+        return {
+          entries: entries.map((entry) =>
+            ignored.has(entry.path) ? { ...entry, ignored: true } : entry,
           ),
-        );
-        if (ignoredEntries) return ignoredEntries;
+          truncated: false,
+        };
       }
       return yield* Effect.gen(function* () {
         const searchIndex = yield* WorkspaceSearchIndex.WorkspaceSearchIndex;
@@ -308,4 +360,5 @@ export const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(WorkspaceEntries, make).pipe(
   Layer.provide(WorkspaceSearchIndex.WorkspaceSearchIndexMap.layer),
+  Layer.provide(VcsProcess.layer),
 );
