@@ -4,6 +4,7 @@ import { emptyProviderSnapshot } from "@t3tools/shared/quotaParse";
 
 import {
   parseRetryAfterMs,
+  shouldRefreshProvider,
   QUOTA_DEFAULT_RATE_LIMIT_MS,
   QUOTA_MIN_RATE_LIMIT_MS,
   shouldUseCachedSnapshot,
@@ -32,6 +33,17 @@ function entry(overrides: Partial<QuotaCacheEntry> = {}): QuotaCacheEntry {
     ...overrides,
   };
 }
+
+describe("shouldRefreshProvider", () => {
+  it("forces only the named providers", () => {
+    expect(shouldRefreshProvider({}, "claude")).toBe(false);
+    expect(shouldRefreshProvider({ providers: ["claude"] }, "claude")).toBe(false);
+    expect(shouldRefreshProvider({ refresh: true }, "cursor")).toBe(true);
+    expect(shouldRefreshProvider({ refresh: true, providers: ["claude"] }, "claude")).toBe(true);
+    expect(shouldRefreshProvider({ refresh: true, providers: ["claude"] }, "codex")).toBe(false);
+    expect(shouldRefreshProvider({ refresh: true, providers: [] }, "claude")).toBe(false);
+  });
+});
 
 describe("shouldUseCachedSnapshot", () => {
   it("reuses a fresh snapshot and honors manual refresh cooldown", () => {

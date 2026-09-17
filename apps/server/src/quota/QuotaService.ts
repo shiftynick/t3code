@@ -59,6 +59,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import {
   parseRetryAfterMs,
   QUOTA_SUCCESS_CACHE_MS,
+  shouldRefreshProvider,
   shouldUseCachedSnapshot,
   type QuotaCacheEntry,
 } from "./quotaCache.ts";
@@ -1054,9 +1055,13 @@ const make = Effect.gen(function* () {
   const readSnapshot = Effect.fn("QuotaService.readSnapshot")(function* (
     input: QuotaSnapshotInput,
   ) {
-    const refresh = input.refresh === true;
     const [claude, codex, cursor, antigravity] = yield* Effect.all(
-      [readClaude(refresh), readCodex(refresh), readCursor(refresh), readAntigravity(refresh)],
+      [
+        readClaude(shouldRefreshProvider(input, "claude")),
+        readCodex(shouldRefreshProvider(input, "codex")),
+        readCursor(shouldRefreshProvider(input, "cursor")),
+        readAntigravity(shouldRefreshProvider(input, "antigravity")),
+      ],
       { concurrency: "unbounded" },
     );
     const readAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));

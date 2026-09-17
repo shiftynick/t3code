@@ -18,6 +18,7 @@ import { useCallback } from "react";
 import { appAtomRegistry } from "./atom-registry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
+import { useAtomCommand } from "./use-atom-command";
 
 export type { EnvironmentQuotaStatus } from "@t3tools/client-runtime/quota";
 
@@ -52,16 +53,22 @@ export interface QuotaView {
 
 export function useQuota(): QuotaView {
   const environments = useAtomValue(quotaStatusesAtom);
+  const requestRefresh = useAtomCommand(serverEnvironment.refreshQuotaSnapshot, {
+    reportFailure: false,
+  });
   const refresh = useCallback(() => {
     for (const environment of environments) {
-      appAtomRegistry.refresh(
-        serverEnvironment.quotaSnapshot({
-          environmentId: environment.environmentId,
-          input: EMPTY_QUOTA_INPUT,
-        }),
-      );
+      const environmentId = environment.environmentId;
+      void (async () => {
+        await requestRefresh({ environmentId, input: { refresh: true } });
+        // The forced read already refilled the server cache, so re-running the
+        // shared query costs no provider call.
+        appAtomRegistry.refresh(
+          serverEnvironment.quotaSnapshot({ environmentId, input: EMPTY_QUOTA_INPUT }),
+        );
+      })();
     }
-  }, [environments]);
+  }, [environments, requestRefresh]);
 
   const answeredCount = environments.filter((environment) => environment.snapshot !== null).length;
   const stillReporting = environments.filter(

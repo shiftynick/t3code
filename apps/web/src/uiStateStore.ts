@@ -20,7 +20,6 @@ const LEGACY_PERSISTED_STATE_KEYS = [
 ] as const;
 
 export interface PersistedUiState {
-  sidebarQuotaExpanded?: boolean;
   projectExpandedById?: Record<string, boolean>;
   projectOrder?: string[];
   threadLastVisitedAtById?: Record<string, string>;
@@ -35,7 +34,6 @@ export interface PersistedUiState {
 }
 
 export interface UiProjectState {
-  sidebarQuotaExpanded: boolean;
   projectExpandedById: Record<string, boolean>;
   projectOrder: string[];
   // Logical project key the sidebar list is scoped to, or null for "all
@@ -61,7 +59,6 @@ export interface UiState
   extends UiProjectState, UiThreadState, UiEndpointState, UiPullRequestState {}
 
 const initialState: UiState = {
-  sidebarQuotaExpanded: false,
   projectExpandedById: {},
   projectOrder: [],
   sidebarProjectScopeKey: null,
@@ -158,7 +155,6 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
         : {},
     defaultAdvertisedEndpointKey: sanitizeOptionalKey(parsed.defaultAdvertisedEndpointKey),
     sidebarProjectScopeKey: sanitizeOptionalKey(parsed.sidebarProjectScopeKey),
-    sidebarQuotaExpanded: parsed.sidebarQuotaExpanded === true,
     pullRequestMergeMethod: isPullRequestMergeMethod(parsed.pullRequestMergeMethod)
       ? parsed.pullRequestMergeMethod
       : initialState.pullRequestMergeMethod,
@@ -233,7 +229,6 @@ export function persistState(state: UiState): void {
         threadLastVisitedAtById: state.threadLastVisitedAtById,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         sidebarProjectScopeKey: state.sidebarProjectScopeKey,
-        sidebarQuotaExpanded: state.sidebarQuotaExpanded,
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
         threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
         pullRequestMergeMethod: state.pullRequestMergeMethod,
@@ -320,16 +315,6 @@ export function setThreadChangedFilesExpanded(
         [turnId]: expanded,
       },
     },
-  };
-}
-
-export function setSidebarQuotaExpanded(state: UiState, expanded: boolean): UiState {
-  if (state.sidebarQuotaExpanded === expanded) {
-    return state;
-  }
-  return {
-    ...state,
-    sidebarQuotaExpanded: expanded,
   };
 }
 
@@ -439,7 +424,6 @@ export function reorderProjects(
 }
 
 interface UiStateStore extends UiState {
-  setSidebarQuotaExpanded: (expanded: boolean) => void;
   markThreadVisited: (threadId: string, visitedAt: string) => void;
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
@@ -456,7 +440,6 @@ interface UiStateStore extends UiState {
 
 export const useUiStateStore = create<UiStateStore>((set) => ({
   ...readPersistedState(),
-  setSidebarQuotaExpanded: (expanded) => set((state) => setSidebarQuotaExpanded(state, expanded)),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId, latestTurnCompletedAt) =>

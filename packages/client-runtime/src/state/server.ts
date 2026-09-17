@@ -1053,6 +1053,16 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetQuotaSnapshot,
       staleTimeMs: 30_000,
     }),
+    // Forces a fresh provider read. Callers refresh `quotaSnapshot` afterwards;
+    // that follow-up read is a server cache hit, so it costs no provider call.
+    refreshQuotaSnapshot: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:quota-refresh",
+      tag: WS_METHODS.serverGetQuotaSnapshot,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
+      },
+    }),
     configProjection,
     welcome,
     consumeResetCredit: createEnvironmentRpcCommand(runtime, {

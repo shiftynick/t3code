@@ -1,4 +1,8 @@
-import type { QuotaProviderSnapshot } from "@t3tools/contracts";
+import type {
+  QuotaProviderKind,
+  QuotaProviderSnapshot,
+  QuotaSnapshotInput,
+} from "@t3tools/contracts";
 
 export const QUOTA_SUCCESS_CACHE_MS = 2 * 60_000;
 export const QUOTA_MANUAL_REFRESH_MIN_MS = 30_000;
@@ -10,6 +14,18 @@ export interface QuotaCacheEntry {
   readonly validUntilMs: number;
   readonly lastRequestAtMs: number;
   readonly rateLimitedUntilMs: number;
+}
+
+/**
+ * A refresh limited to some providers leaves the rest on their normal cache, so
+ * refreshing one panel row never drags a slow or rate-limited provider along.
+ */
+export function shouldRefreshProvider(
+  input: QuotaSnapshotInput,
+  provider: QuotaProviderKind,
+): boolean {
+  if (input.refresh !== true) return false;
+  return input.providers === undefined || input.providers.includes(provider);
 }
 
 export function shouldUseCachedSnapshot(input: {

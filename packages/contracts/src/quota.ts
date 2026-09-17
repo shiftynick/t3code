@@ -57,6 +57,12 @@ export type QuotaProviderSnapshot = typeof QuotaProviderSnapshot.Type;
 export const QuotaSnapshotInput = Schema.Struct({
   /** Bypass the short success cache when the previous provider call is old enough. */
   refresh: Schema.optional(Schema.Boolean),
+  /**
+   * Limits {@link QuotaSnapshotInput.refresh} to these providers. Omitted means
+   * every provider. The answer always carries all providers; the ones left out
+   * come from whatever the environment already had.
+   */
+  providers: Schema.optional(Schema.Array(QuotaProviderKind)),
 });
 export type QuotaSnapshotInput = typeof QuotaSnapshotInput.Type;
 

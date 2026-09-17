@@ -11,14 +11,19 @@ import {
   dedupeEnvironmentQuotaStatuses,
   type EnvironmentQuotaStatus,
 } from "@t3tools/client-runtime/quota";
-import { QUOTA_CONTRACT_VERSION } from "@t3tools/contracts";
+import {
+  QUOTA_CONTRACT_VERSION,
+  type EnvironmentId,
+  type QuotaProviderKind,
+} from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentPresentations } from "./presentation";
 import { serverEnvironment } from "./server";
+import { useAtomCommand } from "./use-atom-command";
 
 export type { EnvironmentQuotaStatus } from "@t3tools/client-runtime/quota";
 
@@ -44,25 +49,77 @@ const quotaStatusesAtom = Atom.make((get): readonly EnvironmentQuotaStatus[] => 
   return statuses;
 }).pipe(Atom.withLabel("web-quota:statuses"));
 
+/** Identifies one in-flight refresh: a whole environment, or one of its providers. */
+export function quotaRefreshKey(
+  environmentId: EnvironmentId,
+  provider?: QuotaProviderKind,
+): string {
+  return provider === undefined ? environmentId : `${environmentId}:${provider}`;
+}
+
 export interface QuotaView {
   readonly environments: readonly EnvironmentQuotaStatus[];
   readonly isPending: boolean;
   readonly isPartial: boolean;
+  /** Re-reads every provider on every environment. */
   readonly refresh: () => void;
+  /** Re-reads one provider on one environment, leaving the others cached. */
+  readonly refreshProvider: (environmentId: EnvironmentId, provider: QuotaProviderKind) => void;
+  readonly refreshingKeys: ReadonlySet<string>;
 }
 
 export function useQuota(): QuotaView {
   const environments = useAtomValue(quotaStatusesAtom);
+  const requestRefresh = useAtomCommand(serverEnvironment.refreshQuotaSnapshot, {
+    reportFailure: false,
+  });
+  const [refreshingKeys, setRefreshingKeys] = useState<ReadonlySet<string>>(() => new Set());
+
+  const runRefresh = useCallback(
+    (environmentId: EnvironmentId, provider?: QuotaProviderKind) => {
+      const key = quotaRefreshKey(environmentId, provider);
+      setRefreshingKeys((current) => {
+        if (current.has(key)) return current;
+        const next = new Set(current);
+        next.add(key);
+        return next;
+      });
+      void (async () => {
+        await requestRefresh({
+          environmentId,
+          input: {
+            refresh: true,
+            ...(provider === undefined ? {} : { providers: [provider] }),
+          },
+        });
+        // The forced read already refilled the server cache, so re-running the
+        // shared query costs no provider call and updates every panel at once.
+        appAtomRegistry.refresh(
+          serverEnvironment.quotaSnapshot({ environmentId, input: EMPTY_QUOTA_INPUT }),
+        );
+        setRefreshingKeys((current) => {
+          if (!current.has(key)) return current;
+          const next = new Set(current);
+          next.delete(key);
+          return next;
+        });
+      })();
+    },
+    [requestRefresh],
+  );
+
   const refresh = useCallback(() => {
     for (const environment of environments) {
-      appAtomRegistry.refresh(
-        serverEnvironment.quotaSnapshot({
-          environmentId: environment.environmentId,
-          input: EMPTY_QUOTA_INPUT,
-        }),
-      );
+      runRefresh(environment.environmentId);
     }
-  }, [environments]);
+  }, [environments, runRefresh]);
+
+  const refreshProvider = useCallback(
+    (environmentId: EnvironmentId, provider: QuotaProviderKind) => {
+      runRefresh(environmentId, provider);
+    },
+    [runRefresh],
+  );
 
   const answeredCount = environments.filter((environment) => environment.snapshot !== null).length;
   const stillReporting = environments.filter(
@@ -74,5 +131,7 @@ export function useQuota(): QuotaView {
     isPending: answeredCount === 0 && stillReporting > 0,
     isPartial: answeredCount > 0 && stillReporting > 0,
     refresh,
+    refreshProvider,
+    refreshingKeys,
   };
 }
