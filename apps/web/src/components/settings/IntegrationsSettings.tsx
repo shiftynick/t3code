@@ -1,3 +1,5 @@
+import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
+import { DeviceToolVersions } from "../device/DeviceToolVersions";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { DeviceHostsSettings } from "./DeviceHostsSettings";
@@ -470,6 +472,44 @@ function BrowserAppearanceSetting({ disabled }: { readonly disabled: boolean }) 
   );
 }
 
+function BrowserRecordingInputSettings({ disabled }: { readonly disabled: boolean }) {
+  const showKeys = useClientSettings((settings) => settings.browserRecordingShowKeyPresses);
+  const showMouse = useClientSettings((settings) => settings.browserRecordingShowMousePresses);
+  const updateSettings = useUpdatePrimarySettings();
+  return (
+    <>
+      <SettingsRow
+        {...searchableSetting("browser-recording-key-presses")}
+        description="Show pressed keys and shortcuts in new recordings. Password fields are excluded."
+        control={
+          <Switch
+            disabled={disabled}
+            checked={showKeys}
+            aria-label="Show key presses in recordings"
+            onCheckedChange={(checked) =>
+              updateSettings({ browserRecordingShowKeyPresses: Boolean(checked) })
+            }
+          />
+        }
+      />
+      <SettingsRow
+        {...searchableSetting("browser-recording-mouse-presses")}
+        description="Highlight mouse presses and held buttons in new recordings."
+        control={
+          <Switch
+            disabled={disabled}
+            checked={showMouse}
+            aria-label="Show mouse presses in recordings"
+            onCheckedChange={(checked) =>
+              updateSettings({ browserRecordingShowMousePresses: Boolean(checked) })
+            }
+          />
+        }
+      />
+    </>
+  );
+}
+
 function BrowserRecordingFrameRateSetting({ disabled }: { readonly disabled: boolean }) {
   const frameRate = useClientSettings((settings) => settings.browserRecordingFrameRate);
   const updateSettings = useUpdatePrimarySettings();
@@ -645,6 +685,21 @@ function DeviceIntegrationControls({
     }
   };
 
+  const checkVersions = state.supportsToolInspection ? (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={!environmentId || pending !== null || busy}
+      onClick={() => {
+        if (!environmentId) return;
+        setPending("check");
+        void list({ environmentId, input: { inspectOnly: true } }).finally(() => setPending(null));
+      }}
+    >
+      {pending === "check" ? "Checking…" : "Check versions"}
+    </Button>
+  ) : null;
+
   return (
     <>
       <SettingsRow
@@ -654,6 +709,11 @@ function DeviceIntegrationControls({
         description={deviceHubDescription}
         control={
           <>
+            <DeviceToolVersions
+              action={checkVersions}
+              kind="hub"
+              tools={state.hosts.find((host) => host.kind === "local")?.tools}
+            />
             {pending === "hub" ? <DeviceHubSetupStatus state={state} pending compact /> : null}
             <ScopedSwitch
               settingKeys={["enableDeviceSupport"]}
@@ -713,6 +773,11 @@ function DeviceIntegrationControls({
         description={agentDeviceDescription}
         control={
           <>
+            <DeviceToolVersions
+              action={checkVersions}
+              kind="agent"
+              tools={state.hosts.find((host) => host.kind === "local")?.tools}
+            />
             {pending === "agent" ? <AgentDeviceSetupStatus state={state} pending compact /> : null}
             <ScopedSwitch
               settingKeys={["enableAgentDeviceAccess"]}
@@ -732,10 +797,11 @@ function DeviceIntegrationControls({
           </>
         }
       />
-      {state.hostStatus === "failed" && state.hostStatusDetail ? (
-        <p role="alert" className="px-4 py-3 text-xs text-destructive">
-          {state.hostStatusDetail}
-        </p>
+      {environmentId ? (
+        <DeviceHostUpdates
+          state={{ ...state, hosts: state.hosts.filter((host) => host.kind === "local") }}
+          environmentId={environmentId}
+        />
       ) : null}
       <DeviceHostsSettings environmentId={environmentId} />
     </>
@@ -1326,6 +1392,7 @@ export function IntegrationsSettingsPanel() {
       <BrowserZoomSetting disabled={previewDefaultsDisabled} />
       <BrowserAppearanceSetting disabled={previewDefaultsDisabled} />
       <BrowserRecordingFrameRateSetting disabled={previewDefaultsDisabled} />
+      <BrowserRecordingInputSettings disabled={previewDefaultsDisabled} />
       <BrowserLinkTargetSetting disabled={previewDefaultsDisabled} />
       <BrowserAutoShowFloatingPreviewSetting disabled={previewDefaultsDisabled} />
     </>
