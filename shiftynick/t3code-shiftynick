@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""Build the local fork only when its inputs or generated outputs change."""
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+REPO = Path.home() / 'Work/t3code'
+STATE = REPO / '.t3'
+STAMP = STATE / 'desktop-build.json'
+OUTPUTS = ('apps/desktop/dist-electron', 'apps/server/dist', 'apps/web/dist')
+REQUIRED = ('apps/desktop/dist-electron/main.cjs', 'apps/desktop/dist-electron/preload.cjs',
+            'apps/server/dist/bin.mjs', 'apps/web/dist/index.html', 'node_modules/.modules.yaml')
+MISE = ['/usr/bin/mise', 'exec', 'node@24.20.0', '--']
+VP = str(Path.home() / '.vite-plus/bin/vp')
+
+
+def digest(paths):
+    result = hashlib.sha256()
+    for name in sorted(set(paths)):
+        path = REPO / name
+        result.update(os.fsencode(name) + b'\0')
+        if path.is_symlink():
+            result.update(b'link:' + os.fsencode(os.readlink(path)))
+        if path.is_file():
+            result.update(hashlib.sha256(path.read_bytes()).digest())
+        else:
+            result.update(b'missing')
+    return result.hexdigest()
+
+
+def inputs():
+    # Git's allowlist excludes build output, caches and local databases. Include
+    # uncommitted and untracked files, plus the ignored public build env files.
+    names = subprocess.check_output(
+        ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], cwd=REPO
+    ).decode().split('\0')
+    names = [n for n in names if n]
+    names += ['.env', '.env.local', '.mise.local.toml']
+    value = digest(names) + hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def outputs():
+    if any(not (REPO / path).is_file() for path in REQUIRED):
+        return None
+    paths = [str(p.relative_to(REPO)) for folder in OUTPUTS
+             for p in (REPO / folder).rglob('*') if p.is_file() or p.is_symlink()]
+    return digest(paths)
+
+
+def fresh(source, built):
+    try:
+        saved = json.loads(STAMP.read_text())
+    except (OSError, ValueError):
+        return False
+    return built is not None and saved == {'inputs': source, 'outputs': built}
+
+
+def notify(message):
+    subprocess.run(['notify-send', 'T3 Code (shiftynick)', message], check=False)
+
+
+def build_command(args, log):
+    print('+', ' '.join(args), flush=True)
+    with subprocess.Popen(args, cwd=REPO, env=ENV, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT, text=True) as child:
+        for line in child.stdout:
+            print(line, end='', flush=True)
+            log.write(line)
+            log.flush()
+        if child.wait():
+            raise RuntimeError('Build failed. See ' + str(STATE / 'desktop-build.log'))
+
+
+def prepare():
+    source, built = inputs(), outputs()
+    if fresh(source, built):
+        print('Desktop build is current; skipping build.', flush=True)
+        return
+    # Invalidate first: even a partial failed rebuild must never be launched.
+    STAMP.unlink(missing_ok=True)
+    print('Preparing the latest local desktop build…', flush=True)
+    with (STATE / 'desktop-build.log').open('w') as log:
+        build_command(MISE + [VP, 'install', '--frozen-lockfile'], log)
+        build_command(MISE + [VP, 'run', 'build:desktop'], log)
+        build_command(MISE + ['node', 'apps/desktop/scripts/ensure-electron-runtime.mjs'], log)
+    if inputs() != source:
+        raise RuntimeError('Source changed during the build. Launch again when edits are finished.')
+    built = outputs()
+    if built is None:
+        raise RuntimeError('The build did not produce all required desktop files.')
+    temporary = STAMP.with_suffix('.tmp')
+    temporary.write_text(json.dumps({'inputs': source, 'outputs': built}) + '\n')
+    temporary.replace(STAMP)
+
+
+ENV = {**os.environ, 'T3CODE_HOME': str(STATE)}
+for key in ('VITE_DEV_SERVER_URL', 'VITE_HTTP_URL', 'VITE_WS_URL', 'T3CODE_PORT'):
+    ENV.pop(key, None)
+
+
+UNIT = 't3code-shiftynick-desktop.service'
+
+
+def app_running():
+    state = subprocess.run(['systemctl', '--user', 'show', UNIT, '--property=ActiveState', '--value'],
+                           capture_output=True, text=True, check=True).stdout.strip()
+    return state in ('active', 'activating', 'reloading', 'deactivating')
+
+
+def start_detached():
+    # A user service is independent of the build terminal and its process group.
+    # The worker waits for our build lock, then holds it for the app lifetime.
+    subprocess.run(['systemd-run', '--user', '--collect', '--unit=' + UNIT,
+                    '--property=Type=exec', '--', '/usr/bin/python3',
+                    str(Path(__file__).resolve()), '--run-app'], check=True)
+
+
+def main():
+    branch = subprocess.check_output(['git', 'branch', '--show-current'], cwd=REPO, text=True).strip()
+    if branch != 'shiftynick':
+        raise RuntimeError('Switch ~/Work/t3code to shiftynick before launching.')
+    STATE.mkdir(exist_ok=True)
+    with (STATE / 'desktop-launch.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX if '--run-app' in sys.argv else fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            notify('T3 Code is already running or building. Close it before launching an updated build.')
+            return
+        if '--run-app' in sys.argv:
+            with (STATE / 'desktop-launch.log').open('a') as log:
+                subprocess.run(MISE + ['node', 'apps/desktop/scripts/start-electron.mjs'],
+                               cwd=REPO, env=ENV, stdout=log, stderr=subprocess.STDOUT, check=True)
+            return
+        if app_running():
+            notify('T3 Code is already starting or running. Close it before launching an updated build.')
+            return
+        prepare()
+        if '--prepare-only' in sys.argv:
+            return
+        print('Opening T3 Code independently; this terminal will close…', flush=True)
+        start_detached()
+
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (RuntimeError, OSError, subprocess.CalledProcessError) as error:
+        print(error, file=sys.stderr)
+        notify(str(error))
+        if sys.stdin.isatty():
+            input('Press Enter to close.')
+        sys.exit(1)

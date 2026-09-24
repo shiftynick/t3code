@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=T3 Code (shiftynick)
+Comment=Desktop build of shiftynick's T3 Code fork
+Exec=omarchy launch terminal "/home/shifty/.local/bin/t3code-shiftynick"
+Path=/home/shifty/Work/t3code
+Icon=/home/shifty/Work/t3code/assets/prod/black-universal-1024.png
+Terminal=false
+Categories=Development;
+Keywords=t3code;agents;coding;shiftynick;
+StartupWMClass=t3code
