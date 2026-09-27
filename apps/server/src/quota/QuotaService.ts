@@ -10,7 +10,7 @@
  *
  * @module QuotaService
  */
-import { createHash } from "node:crypto";
+import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
@@ -39,6 +39,7 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   emptyProviderSnapshot,
   humanizeQuotaName,
@@ -238,7 +239,7 @@ export function createQuotaAccountFingerprint(
   accountId: string | null,
 ): string | null {
   if (accountId === null || accountId.trim().length === 0) return null;
-  return createHash("sha256")
+  return NodeCrypto.createHash("sha256")
     .update(`t3-quota-account:v1\0${provider}\0${accountId.trim()}`)
     .digest("hex");
 }
@@ -385,7 +386,7 @@ const make = Effect.gen(function* () {
   const cachedOr = (
     provider: QuotaProviderKind,
     fallback: QuotaProviderSnapshot,
-    nowMs: number,
+    _nowMs: number,
   ) => {
     const cached = cache.get(provider);
     if (cached === undefined) return fallback;
@@ -601,7 +602,7 @@ const make = Effect.gen(function* () {
           },
         });
         yield* client.notify("initialized", undefined);
-        return yield* client.request("account/rateLimits/read", undefined);
+        return yield* client.request("account/rateLimits/read", null);
       }),
     ).pipe(Effect.timeoutOption(Duration.millis(CODEX_REQUEST_TIMEOUT_MS)), Effect.result);
 
@@ -739,7 +740,7 @@ const make = Effect.gen(function* () {
     }
 
     const databasePath = resolveCursorStateDbPath({
-      platform: process.platform,
+      platform: yield* HostProcessPlatform,
       homedir: NodeOS.homedir(),
       ...(process.env.APPDATA ? { appData: process.env.APPDATA } : {}),
       ...(process.env.XDG_CONFIG_HOME ? { xdgConfigHome: process.env.XDG_CONFIG_HOME } : {}),
